@@ -294,7 +294,7 @@ public class TestAwsClientFactories {
     }
 
     @Override
-    public S3AsyncClient s3Async(boolean useCrt) {
+    public S3AsyncClient s3Async() {
       return null;
     }
 

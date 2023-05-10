@@ -450,7 +450,7 @@ public class S3AsyncFileIO extends S3FileIOBase {
       if (clientFactory instanceof CredentialSupplier) {
         this.credential = ((CredentialSupplier) clientFactory).getCredential();
       }
-      this.s3 = () -> clientFactory.s3Async(awsProperties.isS3AsyncClientCrtEnabled());
+      this.s3 = clientFactory::s3Async;
       if (awsProperties.s3PreloadClientEnabled()) {
         client();
       }
