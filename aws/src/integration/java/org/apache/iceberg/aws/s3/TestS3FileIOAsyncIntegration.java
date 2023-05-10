@@ -50,7 +50,7 @@ public class TestS3FileIOAsyncIntegration extends TestS3FileIOIntegrationBase {
 
   private static S3AsyncClient s3(boolean refreshClient) {
     if (refreshClient) {
-      return clientFactory().s3Async(false);
+      return clientFactory().s3Async();
     } else {
       return s3;
     }
