@@ -20,56 +20,98 @@ package org.apache.iceberg.aws.s3;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doReturn;
+import static software.amazon.awssdk.http.SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES;
 
+import com.adobe.testing.s3mock.junit4.S3MockRule;
 import java.io.IOException;
-import java.io.InputStream;
+import java.net.URI;
+import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 
 import org.apache.commons.io.IOUtils;
 import org.apache.iceberg.io.SeekableInputStream;
+import org.assertj.core.api.Assertions;
 import org.junit.Before;
+import org.junit.ClassRule;
 import org.junit.Test;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import software.amazon.awssdk.core.ResponseInputStream;
-import software.amazon.awssdk.core.async.AsyncResponseTransformer;
-import software.amazon.awssdk.http.AbortableInputStream;
-import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.core.async.AsyncRequestBody;
+import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient;
+import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
-import software.amazon.awssdk.services.s3.model.GetObjectResponse;
-
+import software.amazon.awssdk.services.s3.S3Configuration;
+import software.amazon.awssdk.services.s3.model.BucketAlreadyExistsException;
+import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
+import software.amazon.awssdk.services.s3.model.ListBucketsResponse;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectResponse;
+import software.amazon.awssdk.utils.AttributeMap;
 
 public class TestS3AsyncInputStream {
-  @Mock
-  S3AsyncClient s3;
-  @Mock
-  CompletableFuture<Object> getObjectResponseCompletableFuture;
+  @ClassRule public static final S3MockRule S3_MOCK_RULE = S3MockRule.builder().silent().build();
+  private S3AsyncClient s3;
   private final Random random = new Random(1);
 
   @Before
   public void before() {
-    MockitoAnnotations.openMocks(this);
+    s3 =
+        S3AsyncClient.builder()
+            .region(Region.of("us-east-1"))
+            .credentialsProvider(
+                StaticCredentialsProvider.create(AwsBasicCredentials.create("foo", "bar")))
+            .endpointOverride(URI.create(S3_MOCK_RULE.getServiceEndpoint()))
+            .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build())
+            .httpClient(
+                NettyNioAsyncHttpClient.builder()
+                    .buildWithDefaults(
+                        AttributeMap.builder().put(TRUST_ALL_CERTIFICATES, Boolean.TRUE).build()))
+            .build();
+    createBucket("bucket");
+  }
+
+  @Test
+  public void shouldUploadAsyncTest() {
+
+    CompletableFuture<ListBucketsResponse> listBuckets = s3.listBuckets();
+    Assertions.assertThat(listBuckets).isNotNull();
+
+    CompletableFuture<PutObjectResponse> future = s3.putObject(
+            PutObjectRequest.builder()
+                    .bucket("bucket")
+                    .key("key")
+                    .build(),
+            AsyncRequestBody.fromFile(Paths.get("file"))
+    );
+
+    future.whenComplete((resp, err) -> {
+      try {
+        if (resp != null) {
+          System.out.println("my response: " + resp);
+        } else {
+          // Handle error
+          err.printStackTrace();
+        }
+      } finally {
+        // Lets the application shut down. Only close the client when you are completely done with it.
+        s3.close();
+      }
+    });
+
+    future.join();
   }
 
   @Test
   public void testRead() throws Exception {
+
     S3URI uri = new S3URI("s3://bucket/path/to/read.dat");
     int dataSize = 1024 * 1024 * 10;
     byte[] data = randomData(dataSize);
-    InputStream empty = new InputStream() {
 
-      @Override
-      public int read() throws IOException {
-        return 0;
-      }
-    };
-
-    doReturn(getObjectResponseCompletableFuture).when(s3).getObject(any(GetObjectRequest.class), any(AsyncResponseTransformer.class));
-    doReturn(new ResponseInputStream<>(GetObjectResponse.builder().build(), AbortableInputStream.create(empty))).when(getObjectResponseCompletableFuture).join();
+    writeS3Data(uri, data);
 
     try (SeekableInputStream in = new S3AsyncInputStream(s3, uri)) {
       int readSize = 1024;
@@ -188,5 +230,23 @@ public class TestS3AsyncInputStream {
     byte[] data = new byte[size];
     random.nextBytes(data);
     return data;
+  }
+
+  private void createBucket(String bucketName) {
+    try {
+      s3.createBucket(CreateBucketRequest.builder().bucket(bucketName).build());
+    } catch (BucketAlreadyExistsException e) {
+      // don't do anything
+    }
+  }
+
+  private void writeS3Data(S3URI uri, byte[] data) throws IOException {
+    s3.putObject(
+            PutObjectRequest.builder()
+                    .bucket(uri.bucket())
+                    .key(uri.key())
+                    .contentLength((long) data.length)
+                    .build(),
+            AsyncRequestBody.fromBytes(data)).join();
   }
 }

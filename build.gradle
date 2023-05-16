@@ -489,12 +489,15 @@ project(':iceberg-aws') {
 
     testImplementation 'software.amazon.awssdk:iam'
     testImplementation 'software.amazon.awssdk:s3control'
+    testImplementation 'software.amazon.awssdk:netty-nio-client'
     testImplementation project(path: ':iceberg-api', configuration: 'testArtifacts')
     testImplementation("com.adobe.testing:s3mock-junit4") {
       exclude module: "spring-boot-starter-logging"
       exclude module: "logback-classic"
       exclude group: 'junit'
     }
+    testImplementation 'software.amazon.awssdk:core'
+    testImplementation 'software.amazon.awssdk:s3'
     testImplementation "com.esotericsoftware:kryo"
     testImplementation "org.xerial:sqlite-jdbc"
     testImplementation "org.testcontainers:testcontainers"
