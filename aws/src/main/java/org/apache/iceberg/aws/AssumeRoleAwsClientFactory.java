@@ -48,21 +48,13 @@ public class AssumeRoleAwsClientFactory implements AwsClientFactory {
   }
 
   @Override
-  public S3AsyncClient s3Async(boolean useCrt) {
-    if (useCrt) {
-      return S3AsyncClient.crtBuilder()
-          .credentialsProvider(getCredentialsProvider())
-          .region(Region.of(awsProperties.clientAssumeRoleRegion()))
-          .applyMutation(awsProperties::applyS3EndpointConfigurations)
-          .build();
-    } else {
-      return S3AsyncClient.builder()
-          .applyMutation(this::applyAssumeRoleConfigurations)
-          .applyMutation(awsProperties::applyS3EndpointConfigurations)
-          .applyMutation(awsProperties::applyS3ServiceConfigurations)
-          .applyMutation(awsProperties::applyS3SignerConfiguration)
-          .build();
-    }
+  public S3AsyncClient s3Async() {
+    return S3AsyncClient.builder()
+        .applyMutation(this::applyAssumeRoleConfigurations)
+        .applyMutation(awsProperties::applyS3EndpointConfigurations)
+        .applyMutation(awsProperties::applyS3ServiceConfigurations)
+        .applyMutation(awsProperties::applyS3SignerConfiguration)
+        .build();
   }
 
   @Override

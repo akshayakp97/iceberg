@@ -58,29 +58,14 @@ import software.amazon.awssdk.services.s3.S3AsyncClientBuilder;
 import software.amazon.awssdk.services.s3.S3BaseClientBuilder;
 import software.amazon.awssdk.services.s3.S3ClientBuilder;
 import software.amazon.awssdk.services.s3.S3Configuration;
-import software.amazon.awssdk.services.s3.S3CrtAsyncClientBuilder;
 import software.amazon.awssdk.services.s3.model.ObjectCannedACL;
 import software.amazon.awssdk.services.s3.model.Tag;
 
 public class AwsProperties implements Serializable {
 
   private static final Logger LOG = LoggerFactory.getLogger(AwsProperties.class);
-
   public static final String S3FILEIO_ASYNC_CLIENT_ENABLED = "s3.client.async.enabled";
   public static final boolean S3FILEIO_ASYNC_CLIENT_ENABLED_DEFAULT = false;
-
-  /**
-   * Enable to use CRT based Async client.
-   *
-   * <p>Note that the CRT based client does not support all configurations.
-   *
-   * <p>For more details:
-   * https://docs.aws.amazon.com/sdk-for-java/latest/developer-guide/crt-based-s3-client.html and
-   * https://docs.aws.amazon.com/sdkref/latest/guide/common-runtime.html
-   */
-  public static final String S3FILEIO_ASYNC_CLIENT_CRT_ENABLED = "s3.client.async.crt.enabled";
-
-  public static final boolean S3FILEIO_ASYNC_CLIENT_CRT_ENABLED_DEFAULT = false;
 
   /**
    * Type of S3 Server side encryption used, default to {@link
@@ -772,7 +757,6 @@ public class AwsProperties implements Serializable {
 
   private final boolean s3RemoteSigningEnabled;
   private boolean s3AsyncClientEnabled;
-  private boolean s3AsyncClientCrtEnabled;
   private final Map<String, String> allProperties;
 
   private String restSigningRegion;
@@ -864,11 +848,6 @@ public class AwsProperties implements Serializable {
     this.s3AsyncClientEnabled =
         PropertyUtil.propertyAsBoolean(
             properties, S3FILEIO_ASYNC_CLIENT_ENABLED, S3FILEIO_ASYNC_CLIENT_ENABLED_DEFAULT);
-    this.s3AsyncClientCrtEnabled =
-        PropertyUtil.propertyAsBoolean(
-            properties,
-            S3FILEIO_ASYNC_CLIENT_CRT_ENABLED,
-            S3FILEIO_ASYNC_CLIENT_CRT_ENABLED_DEFAULT);
     this.s3FileIoSseType = properties.getOrDefault(S3FILEIO_SSE_TYPE, S3FILEIO_SSE_TYPE_NONE);
     this.s3FileIoSseKey = properties.get(S3FILEIO_SSE_KEY);
     this.s3FileIoSseMd5 = properties.get(S3FILEIO_SSE_MD5);
@@ -1174,14 +1153,6 @@ public class AwsProperties implements Serializable {
     this.s3AsyncClientEnabled = enabled;
   }
 
-  public boolean isS3AsyncClientCrtEnabled() {
-    return s3AsyncClientCrtEnabled;
-  }
-
-  public void setS3AsyncClientCrtEnabled(boolean enabled) {
-    this.s3AsyncClientCrtEnabled = enabled;
-  }
-
   public int s3FileIoDeleteThreads() {
     return s3FileIoDeleteThreads;
   }
@@ -1230,11 +1201,6 @@ public class AwsProperties implements Serializable {
             : credentialsProvider(s3AccessKeyId, s3SecretAccessKey, s3SessionToken));
   }
 
-  public <T extends S3CrtAsyncClientBuilder> void applyS3CredentialConfigurations(T builder) {
-    builder.credentialsProvider(
-        credentialsProvider(s3AccessKeyId, s3SecretAccessKey, s3SessionToken));
-  }
-
   /**
    * Configure a client AWS region.
    *
@@ -1245,12 +1211,6 @@ public class AwsProperties implements Serializable {
    * </pre>
    */
   public <T extends AwsClientBuilder> void applyClientRegionConfiguration(T builder) {
-    if (clientRegion != null) {
-      builder.region(Region.of(clientRegion));
-    }
-  }
-
-  public <T extends S3CrtAsyncClientBuilder> void applyClientRegionConfiguration(T builder) {
     if (clientRegion != null) {
       builder.region(Region.of(clientRegion));
     }
@@ -1361,10 +1321,6 @@ public class AwsProperties implements Serializable {
    * </pre>
    */
   public <T extends S3ClientBuilder> void applyS3EndpointConfigurations(T builder) {
-    configureEndpoint(builder, s3Endpoint);
-  }
-
-  public <T extends S3CrtAsyncClientBuilder> void applyS3EndpointConfigurations(T builder) {
     configureEndpoint(builder, s3Endpoint);
   }
 
@@ -1506,12 +1462,6 @@ public class AwsProperties implements Serializable {
   }
 
   private <T extends SdkClientBuilder> void configureEndpoint(T builder, String endpoint) {
-    if (endpoint != null) {
-      builder.endpointOverride(URI.create(endpoint));
-    }
-  }
-
-  private <T extends S3CrtAsyncClientBuilder> void configureEndpoint(T builder, String endpoint) {
     if (endpoint != null) {
       builder.endpointOverride(URI.create(endpoint));
     }
