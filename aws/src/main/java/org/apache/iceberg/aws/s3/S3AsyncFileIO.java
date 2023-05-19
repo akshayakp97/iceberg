@@ -18,6 +18,7 @@
  */
 package org.apache.iceberg.aws.s3;
 
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -33,9 +34,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 import javax.annotation.CheckForNull;
-import org.apache.iceberg.aws.AwsClientFactories;
 import org.apache.iceberg.aws.AwsClientFactory;
-import org.apache.iceberg.aws.AwsProperties;
+import org.apache.iceberg.aws.S3FileIOAwsClientFactories;
 import org.apache.iceberg.common.DynConstructors;
 import org.apache.iceberg.io.BulkDeletionFailureException;
 import org.apache.iceberg.io.CredentialSupplier;
@@ -43,6 +43,7 @@ import org.apache.iceberg.io.FileInfo;
 import org.apache.iceberg.io.InputFile;
 import org.apache.iceberg.io.OutputFile;
 import org.apache.iceberg.metrics.MetricsContext;
+import org.apache.iceberg.relocated.com.google.common.base.Joiner;
 import org.apache.iceberg.relocated.com.google.common.collect.AbstractIterator;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
@@ -50,6 +51,7 @@ import org.apache.iceberg.relocated.com.google.common.collect.Multimaps;
 import org.apache.iceberg.relocated.com.google.common.collect.SetMultimap;
 import org.apache.iceberg.relocated.com.google.common.collect.Sets;
 import org.apache.iceberg.relocated.com.google.common.collect.Streams;
+import org.apache.iceberg.util.PropertyUtil;
 import org.apache.iceberg.util.SerializableMap;
 import org.apache.iceberg.util.SerializableSupplier;
 import org.reactivestreams.Subscriber;
@@ -86,11 +88,12 @@ public class S3AsyncFileIO extends S3FileIOBase {
 
   private String credential = null;
   private SerializableSupplier<S3AsyncClient> s3;
-  private AwsProperties awsProperties;
+  private S3FileIOProperties s3FileIOProperties;
   private SerializableMap<String, String> properties = null;
   private transient volatile S3AsyncClient client;
   private MetricsContext metrics = MetricsContext.nullMetrics();
   private final AtomicBoolean isResourceClosed = new AtomicBoolean(false);
+  private transient StackTraceElement[] createStack;
 
   /**
    * No-arg constructor to load the FileIO dynamically.
@@ -100,7 +103,7 @@ public class S3AsyncFileIO extends S3FileIOBase {
   public S3AsyncFileIO() {}
 
   /**
-   * Constructor with custom s3 supplier and default AWS properties.
+   * Constructor with custom s3 supplier and S3FileIO properties.
    *
    * <p>Calling {@link S3AsyncFileIO#initialize(Map)} will overwrite information set in this
    * constructor.
@@ -108,53 +111,49 @@ public class S3AsyncFileIO extends S3FileIOBase {
    * @param s3 s3 supplier
    */
   public S3AsyncFileIO(SerializableSupplier<S3AsyncClient> s3) {
-    this(s3, new AwsProperties());
+    this(s3, new S3FileIOProperties());
   }
 
   /**
-   * Constructor with custom s3 supplier and AWS properties.
+   * Constructor with custom s3 supplier and S3FileIO properties.
    *
    * <p>Calling {@link S3AsyncFileIO#initialize(Map)} will overwrite information set in this
    * constructor.
    *
    * @param s3 s3 supplier
-   * @param awsProperties aws properties
+   * @param s3FileIOProperties S3 FileIO properties
    */
-  public S3AsyncFileIO(SerializableSupplier<S3AsyncClient> s3, AwsProperties awsProperties) {
+  public S3AsyncFileIO(SerializableSupplier<S3AsyncClient> s3, S3FileIOProperties s3FileIOProperties) {
     this.s3 = s3;
-    this.awsProperties = awsProperties;
-  }
-
-  @Override
-  public Map<String, String> properties() {
-    return properties.immutableMap();
+    this.s3FileIOProperties = s3FileIOProperties;
+    this.createStack = Thread.currentThread().getStackTrace();
   }
 
   @Override
   public InputFile newInputFile(String path) {
-    return S3AsyncInputFile.fromLocation(path, client(), awsProperties, metrics);
+    return S3AsyncInputFile.fromLocation(path, client(), s3FileIOProperties, metrics);
   }
 
   @Override
   public InputFile newInputFile(String path, long length) {
-    return S3AsyncInputFile.fromLocation(path, length, client(), awsProperties, metrics);
+    return S3AsyncInputFile.fromLocation(path, length, client(), s3FileIOProperties, metrics);
   }
 
   @Override
   public OutputFile newOutputFile(String path) {
-    return S3AsyncOutputFile.fromLocation(path, client(), awsProperties, metrics);
+    return S3AsyncOutputFile.fromLocation(path, client(), s3FileIOProperties, metrics);
   }
 
   @Override
   public void deleteFile(String path) {
     CompletableFuture<PutObjectTaggingResponse> tagFuture = CompletableFuture.completedFuture(null);
-    if (awsProperties.s3DeleteTags() != null && !awsProperties.s3DeleteTags().isEmpty()) {
-      tagFuture = tagFile(path, awsProperties.s3DeleteTags());
+    if (s3FileIOProperties.deleteTags() != null && !s3FileIOProperties.deleteTags().isEmpty()) {
+      tagFuture = tagFile(path, s3FileIOProperties.deleteTags());
     }
 
     CompletableFuture<DeleteObjectResponse> deleteFuture = CompletableFuture.completedFuture(null);
-    if (awsProperties.isS3DeleteEnabled()) {
-      S3URI location = new S3URI(path, awsProperties.s3BucketToAccessPointMapping());
+    if (s3FileIOProperties.isDeleteEnabled()) {
+      S3URI location = new S3URI(path, s3FileIOProperties.bucketToAccessPointMapping());
       DeleteObjectRequest deleteRequest =
           DeleteObjectRequest.builder().bucket(location.bucket()).key(location.key()).build();
       // Delete unconditionally, but after tagging is complete
@@ -177,8 +176,8 @@ public class S3AsyncFileIO extends S3FileIOBase {
    */
   @Override
   public void deleteFiles(Iterable<String> paths) throws BulkDeletionFailureException {
-    if (awsProperties.s3DeleteTags() != null && !awsProperties.s3DeleteTags().isEmpty()) {
-      final Set<Tag> deleteTags = awsProperties.s3DeleteTags();
+    if (s3FileIOProperties.deleteTags() != null && !s3FileIOProperties.deleteTags().isEmpty()) {
+      final Set<Tag> deleteTags = s3FileIOProperties.deleteTags();
       final CompletableFuture<?>[] tagFutures =
           StreamSupport.stream(paths.spliterator(), false)
               .map(path -> tagFile(path, deleteTags))
@@ -188,16 +187,16 @@ public class S3AsyncFileIO extends S3FileIOBase {
       CompletableFuture.allOf(tagFutures).join();
     }
 
-    if (awsProperties.isS3DeleteEnabled()) {
+    if (s3FileIOProperties.isDeleteEnabled()) {
       SetMultimap<String, String> bucketToObjects =
           Multimaps.newSetMultimap(Maps.newHashMap(), Sets::newHashSet);
       List<CompletableFuture<List<String>>> deletionTasks = Lists.newArrayList();
       for (String path : paths) {
-        S3URI location = new S3URI(path, awsProperties.s3BucketToAccessPointMapping());
+        S3URI location = new S3URI(path, s3FileIOProperties.bucketToAccessPointMapping());
         String bucket = location.bucket();
         String objectKey = location.key();
         bucketToObjects.get(bucket).add(objectKey);
-        if (bucketToObjects.get(bucket).size() == awsProperties.s3FileIoDeleteBatchSize()) {
+        if (bucketToObjects.get(bucket).size() == s3FileIOProperties.deleteBatchSize()) {
           Set<String> keys = Sets.newHashSet(bucketToObjects.get(bucket));
           CompletableFuture<List<String>> deletionTask = deleteBatch(bucket, keys);
           deletionTasks.add(deletionTask);
@@ -249,7 +248,7 @@ public class S3AsyncFileIO extends S3FileIOBase {
    */
   private CompletableFuture<PutObjectTaggingResponse> tagFile(String path, Set<Tag> tagsToAdd)
       throws S3Exception {
-    S3URI location = new S3URI(path, awsProperties.s3BucketToAccessPointMapping());
+    S3URI location = new S3URI(path, s3FileIOProperties.bucketToAccessPointMapping());
     String bucket = location.bucket();
     String objectKey = location.key();
     GetObjectTaggingRequest getObjectTaggingRequest =
@@ -320,7 +319,7 @@ public class S3AsyncFileIO extends S3FileIOBase {
 
   @Override
   public Iterable<FileInfo> listPrefix(String prefix) {
-    S3URI s3uri = new S3URI(prefix, awsProperties.s3BucketToAccessPointMapping());
+    S3URI s3uri = new S3URI(prefix, s3FileIOProperties.bucketToAccessPointMapping());
     ListObjectsV2Request request =
         ListObjectsV2Request.builder().bucket(s3uri.bucket()).prefix(s3uri.key()).build();
 
@@ -442,16 +441,25 @@ public class S3AsyncFileIO extends S3FileIOBase {
   @Override
   public void initialize(Map<String, String> props) {
     this.properties = SerializableMap.copyOf(props);
-    this.awsProperties = new AwsProperties(properties);
+    this.s3FileIOProperties = new S3FileIOProperties(properties);
+    this.createStack =
+        PropertyUtil.propertyAsBoolean(props, "init-creation-stacktrace", true)
+            ? Thread.currentThread().getStackTrace()
+            : null;
 
     // Do not override s3 client if it was provided
     if (s3 == null) {
-      AwsClientFactory clientFactory = AwsClientFactories.from(props);
+      Object clientFactory = S3FileIOAwsClientFactories.initialize(props);
+      if (clientFactory instanceof S3FileIOAwsClientFactory) {
+        this.s3 = ((S3FileIOAwsClientFactory) clientFactory)::s3;
+      }
+      if (clientFactory instanceof AwsClientFactory) {
+        this.s3 = ((AwsClientFactory) clientFactory)::s3;
+      }
       if (clientFactory instanceof CredentialSupplier) {
         this.credential = ((CredentialSupplier) clientFactory).getCredential();
       }
-      this.s3 = clientFactory::s3Async;
-      if (awsProperties.s3PreloadClientEnabled()) {
+      if (s3FileIOProperties.isPreloadClientEnabled()) {
         client();
       }
     }
@@ -480,6 +488,21 @@ public class S3AsyncFileIO extends S3FileIOBase {
     if (isResourceClosed.compareAndSet(false, true)) {
       if (client != null) {
         client.close();
+      }
+    }
+  }
+
+  @SuppressWarnings("checkstyle:NoFinalizer")
+  @Override
+  protected void finalize() throws Throwable {
+    super.finalize();
+    if (!isResourceClosed.get()) {
+      close();
+
+      if (null != createStack) {
+        String trace =
+            Joiner.on("\n\t").join(Arrays.copyOfRange(createStack, 1, createStack.length));
+        LOG.warn("Unclosed S3FileIO instance created by:\n\t{}", trace);
       }
     }
   }
