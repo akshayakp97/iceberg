@@ -18,6 +18,12 @@
  */
 package org.apache.iceberg.aws;
 
+import java.io.Serializable;
+import java.net.URI;
+import java.util.Collections;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.apache.iceberg.aws.dynamodb.DynamoDbCatalog;
 import org.apache.iceberg.aws.glue.GlueCatalog;
 import org.apache.iceberg.aws.lakeformation.LakeFormationAwsClientFactory;
@@ -53,13 +59,6 @@ import software.amazon.awssdk.services.s3.S3ClientBuilder;
 import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.model.ObjectCannedACL;
 import software.amazon.awssdk.services.s3.model.Tag;
-
-import java.io.Serializable;
-import java.net.URI;
-import java.util.Collections;
-import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 public class AwsProperties implements Serializable {
 
@@ -1586,6 +1585,7 @@ public class AwsProperties implements Serializable {
             ? AnonymousCredentialsProvider.create()
             : credentialsProvider(s3AccessKeyId, s3SecretAccessKey, s3SessionToken));
   }
+
   public <T extends S3AsyncClientBuilder> void applyS3CredentialConfigurations(T builder) {
     builder.credentialsProvider(
         credentialsProvider(s3AccessKeyId, s3SecretAccessKey, s3SessionToken));
@@ -1655,10 +1655,10 @@ public class AwsProperties implements Serializable {
         .dualstackEnabled(s3DualStackEnabled)
         .serviceConfiguration(
             S3Configuration.builder()
-              .pathStyleAccessEnabled(s3PathStyleAccess)
-              .useArnRegionEnabled(s3UseArnRegionEnabled)
-              .accelerateModeEnabled(s3AccelerationEnabled)
-              .build());
+                .pathStyleAccessEnabled(s3PathStyleAccess)
+                .useArnRegionEnabled(s3UseArnRegionEnabled)
+                .accelerateModeEnabled(s3AccelerationEnabled)
+                .build());
   }
 
   /**
@@ -1682,6 +1682,7 @@ public class AwsProperties implements Serializable {
                   SdkAdvancedClientOption.SIGNER, S3V4RestSignerClient.create(allProperties)));
     }
   }
+
   public <T extends S3AsyncClientBuilder> void applyS3SignerConfiguration(T builder) {
     if (s3RemoteSigningEnabled) {
       builder.overrideConfiguration(

@@ -123,7 +123,8 @@ public class S3AsyncFileIO extends S3FileIOBase {
    * @param s3 s3 supplier
    * @param s3FileIOProperties S3 FileIO properties
    */
-  public S3AsyncFileIO(SerializableSupplier<S3AsyncClient> s3, S3FileIOProperties s3FileIOProperties) {
+  public S3AsyncFileIO(
+      SerializableSupplier<S3AsyncClient> s3, S3FileIOProperties s3FileIOProperties) {
     this.s3 = s3;
     this.s3FileIOProperties = s3FileIOProperties;
     this.createStack = Thread.currentThread().getStackTrace();
