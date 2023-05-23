@@ -34,7 +34,10 @@ import org.apache.iceberg.relocated.com.google.common.collect.Sets;
 import org.apache.iceberg.util.PropertyUtil;
 import org.apache.iceberg.util.SerializableMap;
 import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider;
+import software.amazon.awssdk.awscore.client.builder.AwsClientBuilder;
+import software.amazon.awssdk.core.client.builder.SdkClientBuilder;
 import software.amazon.awssdk.core.client.config.SdkAdvancedClientOption;
+import software.amazon.awssdk.services.s3.S3BaseClientBuilder;
 import software.amazon.awssdk.services.s3.S3ClientBuilder;
 import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.model.ObjectCannedACL;
@@ -49,6 +52,22 @@ public class S3FileIOProperties implements Serializable {
    * provide backward compatibility.
    */
   public static final String CLIENT_FACTORY = "s3.client-factory-impl";
+
+  public static final String S3FILEIO_ASYNC_CLIENT_ENABLED = "s3.client.async.enabled";
+  public static final boolean S3FILEIO_ASYNC_CLIENT_ENABLED_DEFAULT = false;
+
+  /**
+   * Enable to use CRT based Async client.
+   *
+   * <p>Note that the CRT based client does not support all configurations.
+   *
+   * <p>For more details:
+   * https://docs.aws.amazon.com/sdk-for-java/latest/developer-guide/crt-based-s3-client.html and
+   * https://docs.aws.amazon.com/sdkref/latest/guide/common-runtime.html
+   */
+  public static final String S3FILEIO_ASYNC_CLIENT_CRT_ENABLED = "s3.client.async.crt.enabled";
+
+  public static final boolean S3FILEIO_ASYNC_CLIENT_CRT_ENABLED_DEFAULT = false;
 
   /**
    * Type of S3 Server side encryption used, default to {@link S3FileIOProperties#SSE_TYPE_NONE}.
@@ -367,6 +386,8 @@ public class S3FileIOProperties implements Serializable {
   private boolean isUseArnRegionEnabled;
   private boolean isAccelerationEnabled;
   private String endpoint;
+
+  private boolean asyncClientEnabled;
   private final boolean isRemoteSigningEnabled;
   private final Map<String, String> allProperties;
 
@@ -398,6 +419,7 @@ public class S3FileIOProperties implements Serializable {
     this.isUseArnRegionEnabled = USE_ARN_REGION_ENABLED_DEFAULT;
     this.isAccelerationEnabled = ACCELERATION_ENABLED_DEFAULT;
     this.isRemoteSigningEnabled = REMOTE_SIGNING_ENABLED_DEFAULT;
+    this.asyncClientEnabled = S3FILEIO_ASYNC_CLIENT_ENABLED_DEFAULT;
     this.allProperties = Maps.newHashMap();
 
     ValidationException.check(
@@ -486,6 +508,9 @@ public class S3FileIOProperties implements Serializable {
     this.isRemoteSigningEnabled =
         PropertyUtil.propertyAsBoolean(
             properties, REMOTE_SIGNING_ENABLED, REMOTE_SIGNING_ENABLED_DEFAULT);
+    this.asyncClientEnabled =
+            PropertyUtil.propertyAsBoolean(
+                    properties, S3FILEIO_ASYNC_CLIENT_ENABLED, S3FILEIO_ASYNC_CLIENT_ENABLED_DEFAULT);
     this.allProperties = SerializableMap.copyOf(properties);
 
     ValidationException.check(
@@ -625,6 +650,14 @@ public class S3FileIOProperties implements Serializable {
     this.isWriteNamespaceTagEnabled = writeNamespaceTagEnabled;
   }
 
+  public boolean isAsyncClientEnabled() {
+    return asyncClientEnabled;
+  }
+
+  public void setAsyncClientEnabled(boolean enabled) {
+    this.asyncClientEnabled = enabled;
+  }
+
   public Set<Tag> deleteTags() {
     return deleteTags;
   }
@@ -671,7 +704,7 @@ public class S3FileIOProperties implements Serializable {
     return (accessKeyId == null) == (secretAccessKey == null);
   }
 
-  public <T extends S3ClientBuilder> void applyCredentialConfigurations(
+  public <T extends AwsClientBuilder> void applyCredentialConfigurations(
       AwsClientProperties awsClientProperties, T builder) {
     builder.credentialsProvider(
         isRemoteSigningEnabled
@@ -689,7 +722,7 @@ public class S3FileIOProperties implements Serializable {
    *     S3Client.builder().applyMutation(s3FileIOProperties::applyS3ServiceConfigurations)
    * </pre>
    */
-  public <T extends S3ClientBuilder> void applyServiceConfigurations(T builder) {
+  public <T extends S3BaseClientBuilder<T, ?>> void applyServiceConfigurations(T builder) {
     builder
         .dualstackEnabled(isDualStackEnabled)
         .serviceConfiguration(
@@ -709,7 +742,7 @@ public class S3FileIOProperties implements Serializable {
    *     S3Client.builder().applyMutation(s3FileIOProperties::applyS3SignerConfiguration)
    * </pre>
    */
-  public <T extends S3ClientBuilder> void applySignerConfiguration(T builder) {
+  public <T extends S3BaseClientBuilder<?, ?>> void applySignerConfiguration(T builder) {
     if (isRemoteSigningEnabled) {
       builder.overrideConfiguration(
           c ->
@@ -727,7 +760,7 @@ public class S3FileIOProperties implements Serializable {
    *     S3Client.builder().applyMutation(awsProperties::applyS3EndpointConfigurations)
    * </pre>
    */
-  public <T extends S3ClientBuilder> void applyEndpointConfigurations(T builder) {
+  public <T extends AwsClientBuilder> void applyEndpointConfigurations(T builder) {
     if (endpoint != null) {
       builder.endpointOverride(URI.create(endpoint));
     }

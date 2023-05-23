@@ -21,6 +21,7 @@ package org.apache.iceberg.aws.s3;
 import java.util.Map;
 import org.apache.iceberg.aws.AwsClientProperties;
 import org.apache.iceberg.aws.HttpClientProperties;
+import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.S3Client;
 
 class DefaultS3FileIOAwsClientFactory implements S3FileIOAwsClientFactory {
@@ -54,5 +55,18 @@ class DefaultS3FileIOAwsClientFactory implements S3FileIOAwsClientFactory {
                     awsClientProperties, s3ClientBuilder))
         .applyMutation(s3FileIOProperties::applySignerConfiguration)
         .build();
+  }
+
+  @Override
+  public S3AsyncClient s3Async() {
+    return S3AsyncClient.builder()
+            .applyMutation(awsClientProperties::applyClientRegionConfiguration)
+            .applyMutation(s3FileIOProperties::applyEndpointConfigurations)
+            .applyMutation(s3FileIOProperties::applyServiceConfigurations)
+            .applyMutation(s3ClientBuilder ->
+                    s3FileIOProperties.applyCredentialConfigurations(
+                            awsClientProperties, s3ClientBuilder))
+            .applyMutation(s3FileIOProperties::applySignerConfiguration)
+            .build();
   }
 }
