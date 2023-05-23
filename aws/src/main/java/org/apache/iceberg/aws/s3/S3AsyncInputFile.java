@@ -18,7 +18,6 @@
  */
 package org.apache.iceberg.aws.s3;
 
-import org.apache.iceberg.aws.AwsProperties;
 import org.apache.iceberg.encryption.NativeFileCryptoParameters;
 import org.apache.iceberg.encryption.NativelyEncryptedFile;
 import org.apache.iceberg.io.InputFile;
@@ -31,12 +30,12 @@ public class S3AsyncInputFile extends BaseS3AsyncFile implements InputFile, Nati
   private Long length;
 
   public static S3AsyncInputFile fromLocation(
-      String location, S3AsyncClient client, AwsProperties awsProperties, MetricsContext metrics) {
+      String location, S3AsyncClient client, S3FileIOProperties s3FileIOProperties, MetricsContext metrics) {
     return new S3AsyncInputFile(
         client,
-        new S3URI(location, awsProperties.s3BucketToAccessPointMapping()),
+        new S3URI(location, s3FileIOProperties.bucketToAccessPointMapping()),
         null,
-        awsProperties,
+        s3FileIOProperties,
         metrics);
   }
 
@@ -44,13 +43,13 @@ public class S3AsyncInputFile extends BaseS3AsyncFile implements InputFile, Nati
       String location,
       long length,
       S3AsyncClient client,
-      AwsProperties awsProperties,
+      S3FileIOProperties s3FileIOProperties,
       MetricsContext metrics) {
     return new S3AsyncInputFile(
         client,
-        new S3URI(location, awsProperties.s3BucketToAccessPointMapping()),
+        new S3URI(location, s3FileIOProperties.bucketToAccessPointMapping()),
         length > 0 ? length : null,
-        awsProperties,
+        s3FileIOProperties,
         metrics);
   }
 
@@ -58,9 +57,9 @@ public class S3AsyncInputFile extends BaseS3AsyncFile implements InputFile, Nati
       S3AsyncClient client,
       S3URI uri,
       Long length,
-      AwsProperties awsProperties,
+      S3FileIOProperties s3FileIOProperties,
       MetricsContext metrics) {
-    super(client, uri, awsProperties, metrics);
+    super(client, uri, s3FileIOProperties, metrics);
     this.length = length;
   }
 
@@ -80,7 +79,7 @@ public class S3AsyncInputFile extends BaseS3AsyncFile implements InputFile, Nati
 
   @Override
   public SeekableInputStream newStream() {
-    return new S3AsyncInputStream(client(), uri(), awsProperties(), metrics());
+    return new S3AsyncInputStream(client(), uri(), s3FileIOProperties(), metrics());
   }
 
   @Override

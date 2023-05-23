@@ -19,7 +19,6 @@
 package org.apache.iceberg.aws.s3;
 
 import java.util.concurrent.CompletionException;
-import org.apache.iceberg.aws.AwsProperties;
 import org.apache.iceberg.metrics.MetricsContext;
 import software.amazon.awssdk.http.HttpStatusCode;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
@@ -30,15 +29,15 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
 abstract class BaseS3AsyncFile {
   private final S3AsyncClient client;
   private final S3URI uri;
-  private final AwsProperties awsProperties;
+  private final S3FileIOProperties s3FileIOProperties;
   private HeadObjectResponse metadata;
   private final MetricsContext metrics;
 
   BaseS3AsyncFile(
-      S3AsyncClient client, S3URI uri, AwsProperties awsProperties, MetricsContext metrics) {
+      S3AsyncClient client, S3URI uri, S3FileIOProperties s3FileIOProperties, MetricsContext metrics) {
     this.client = client;
     this.uri = uri;
-    this.awsProperties = awsProperties;
+    this.s3FileIOProperties = s3FileIOProperties;
     this.metrics = metrics;
   }
 
@@ -54,8 +53,8 @@ abstract class BaseS3AsyncFile {
     return uri;
   }
 
-  public AwsProperties awsProperties() {
-    return awsProperties;
+  public S3FileIOProperties s3FileIOProperties() {
+    return s3FileIOProperties;
   }
 
   protected MetricsContext metrics() {
@@ -83,7 +82,7 @@ abstract class BaseS3AsyncFile {
     if (metadata == null) {
       HeadObjectRequest.Builder requestBuilder =
           HeadObjectRequest.builder().bucket(uri().bucket()).key(uri().key());
-      S3RequestUtil.configureEncryption(awsProperties, requestBuilder);
+      S3RequestUtil.configureEncryption(s3FileIOProperties, requestBuilder);
       try {
         metadata = client().headObject(requestBuilder.build()).join();
       } catch (CompletionException e) {

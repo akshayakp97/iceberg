@@ -20,7 +20,6 @@ package org.apache.iceberg.aws.s3;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import org.apache.iceberg.aws.AwsProperties;
 import org.apache.iceberg.encryption.NativeFileCryptoParameters;
 import org.apache.iceberg.encryption.NativelyEncryptedFile;
 import org.apache.iceberg.exceptions.AlreadyExistsException;
@@ -35,17 +34,17 @@ public class S3AsyncOutputFile extends BaseS3AsyncFile
   private NativeFileCryptoParameters nativeEncryptionParameters;
 
   public static S3AsyncOutputFile fromLocation(
-      String location, S3AsyncClient client, AwsProperties awsProperties, MetricsContext metrics) {
+      String location, S3AsyncClient client, S3FileIOProperties s3FileIOProperties, MetricsContext metrics) {
     return new S3AsyncOutputFile(
         client,
-        new S3URI(location, awsProperties.s3BucketToAccessPointMapping()),
-        awsProperties,
+        new S3URI(location, s3FileIOProperties.bucketToAccessPointMapping()),
+        s3FileIOProperties,
         metrics);
   }
 
   S3AsyncOutputFile(
-      S3AsyncClient client, S3URI uri, AwsProperties awsProperties, MetricsContext metrics) {
-    super(client, uri, awsProperties, metrics);
+      S3AsyncClient client, S3URI uri, S3FileIOProperties s3FileIOProperties, MetricsContext metrics) {
+    super(client, uri, s3FileIOProperties, metrics);
   }
 
   /**
@@ -66,7 +65,7 @@ public class S3AsyncOutputFile extends BaseS3AsyncFile
   @Override
   public PositionOutputStream createOrOverwrite() {
     try {
-      return new S3AsyncOutputStream(client(), uri(), awsProperties(), metrics());
+      return new S3AsyncOutputStream(client(), uri(), s3FileIOProperties(), metrics());
     } catch (IOException e) {
       throw new UncheckedIOException("Failed to create output stream for location: " + uri(), e);
     }
@@ -74,7 +73,7 @@ public class S3AsyncOutputFile extends BaseS3AsyncFile
 
   @Override
   public InputFile toInputFile() {
-    return new S3AsyncInputFile(client(), uri(), null, awsProperties(), metrics());
+    return new S3AsyncInputFile(client(), uri(), null, s3FileIOProperties(), metrics());
   }
 
   @Override
