@@ -55,9 +55,9 @@ public class TestS3FileIOSyncIntegration extends TestS3FileIOIntegrationBase {
   }
 
   @Override
-  protected S3FileIO newS3FileIO(AwsClientFactory clientFactory, AwsProperties properties) {
-    properties.setS3AsyncClientEnabled(false);
-    return new S3FileIO(clientFactory, properties);
+  protected S3FileIO newS3FileIO(S3FileIOAwsClientFactory s3FileIOAwsClientFactory, S3FileIOProperties s3FileIOProperties) {
+    s3FileIOProperties.setAsyncClientEnabled(false);
+    return new S3FileIO(s3FileIOAwsClientFactory, s3FileIOProperties);
   }
 
   @Override

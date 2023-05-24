@@ -96,12 +96,12 @@ public class TestS3AsyncOutputStream {
   private final Random random = new Random(1);
   private final Path tmpDir = Files.createTempDirectory("s3fileio-test-");
   private final String newTmpDirectory = "/tmp/newStagingDirectory";
-  private final AwsProperties properties =
-      new AwsProperties(
+  private final S3FileIOProperties properties =
+      new S3FileIOProperties(
           ImmutableMap.of(
-              AwsProperties.S3FILEIO_MULTIPART_SIZE,
+              S3FileIOProperties.MULTIPART_SIZE,
               Integer.toString(5 * 1024 * 1024),
-              AwsProperties.S3FILEIO_STAGING_DIRECTORY,
+              S3FileIOProperties.STAGING_DIRECTORY,
               tmpDir.toString(),
               "s3.write.tags.abc",
               "123",
@@ -126,7 +126,7 @@ public class TestS3AsyncOutputStream {
                     .buildWithDefaults(
                         AttributeMap.builder().put(TRUST_ALL_CERTIFICATES, Boolean.TRUE).build()))
             .build();
-    properties.setS3ChecksumEnabled(false);
+    properties.setChecksumEnabled(false);
     s3mock = mock(S3AsyncClient.class, delegatesTo(s3));
     createBucket(BUCKET);
   }
@@ -194,17 +194,17 @@ public class TestS3AsyncOutputStream {
 
   @Test
   public void testStagingDirectoryCreation() throws IOException {
-    AwsProperties newStagingDirectoryAwsProperties =
-        new AwsProperties(
-            ImmutableMap.of(AwsProperties.S3FILEIO_STAGING_DIRECTORY, newTmpDirectory));
+    S3FileIOProperties newStagingDirectoryS3FileIOProperties =
+        new S3FileIOProperties(
+            ImmutableMap.of(S3FileIOProperties.STAGING_DIRECTORY, newTmpDirectory));
     S3AsyncOutputStream stream =
-        new S3AsyncOutputStream(s3, randomURI(), newStagingDirectoryAwsProperties, nullMetrics());
+        new S3AsyncOutputStream(s3, randomURI(), newStagingDirectoryS3FileIOProperties, nullMetrics());
     stream.close();
   }
 
   @Test
   public void testWriteWithChecksumEnabled() {
-    properties.setS3ChecksumEnabled(true);
+    properties.setChecksumEnabled(true);
     writeTest();
   }
 
@@ -307,17 +307,17 @@ public class TestS3AsyncOutputStream {
 
   private void checkPutObjectRequestContent(
       byte[] data, ArgumentCaptor<PutObjectRequest> putObjectRequestArgumentCaptor) {
-    if (properties.isS3ChecksumEnabled()) {
+    if (properties.isChecksumEnabled()) {
       List<PutObjectRequest> putObjectRequests = putObjectRequestArgumentCaptor.getAllValues();
       assertEquals(getDigest(data, 0, data.length), putObjectRequests.get(0).contentMD5());
     }
   }
 
   private void checkTags(ArgumentCaptor<PutObjectRequest> putObjectRequestArgumentCaptor) {
-    if (properties.isS3ChecksumEnabled()) {
+    if (properties.isChecksumEnabled()) {
       List<PutObjectRequest> putObjectRequests = putObjectRequestArgumentCaptor.getAllValues();
       String tagging = putObjectRequests.get(0).tagging();
-      assertEquals(getTags(properties.s3WriteTags()), tagging);
+      assertEquals(getTags(properties.writeTags()), tagging);
     }
   }
 
@@ -336,7 +336,7 @@ public class TestS3AsyncOutputStream {
 
   private void checkUploadPartRequestContent(
       byte[] data, ArgumentCaptor<UploadPartRequest> uploadPartRequestArgumentCaptor) {
-    if (properties.isS3ChecksumEnabled()) {
+    if (properties.isChecksumEnabled()) {
       List<UploadPartRequest> uploadPartRequests =
           uploadPartRequestArgumentCaptor.getAllValues().stream()
               .sorted(Comparator.comparingInt(UploadPartRequest::partNumber))
