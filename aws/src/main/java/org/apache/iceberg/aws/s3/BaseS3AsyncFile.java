@@ -34,7 +34,10 @@ abstract class BaseS3AsyncFile {
   private final MetricsContext metrics;
 
   BaseS3AsyncFile(
-      S3AsyncClient client, S3URI uri, S3FileIOProperties s3FileIOProperties, MetricsContext metrics) {
+      S3AsyncClient client,
+      S3URI uri,
+      S3FileIOProperties s3FileIOProperties,
+      MetricsContext metrics) {
     this.client = client;
     this.uri = uri;
     this.s3FileIOProperties = s3FileIOProperties;

@@ -34,7 +34,10 @@ public class S3AsyncOutputFile extends BaseS3AsyncFile
   private NativeFileCryptoParameters nativeEncryptionParameters;
 
   public static S3AsyncOutputFile fromLocation(
-      String location, S3AsyncClient client, S3FileIOProperties s3FileIOProperties, MetricsContext metrics) {
+      String location,
+      S3AsyncClient client,
+      S3FileIOProperties s3FileIOProperties,
+      MetricsContext metrics) {
     return new S3AsyncOutputFile(
         client,
         new S3URI(location, s3FileIOProperties.bucketToAccessPointMapping()),
@@ -43,7 +46,10 @@ public class S3AsyncOutputFile extends BaseS3AsyncFile
   }
 
   S3AsyncOutputFile(
-      S3AsyncClient client, S3URI uri, S3FileIOProperties s3FileIOProperties, MetricsContext metrics) {
+      S3AsyncClient client,
+      S3URI uri,
+      S3FileIOProperties s3FileIOProperties,
+      MetricsContext metrics) {
     super(client, uri, s3FileIOProperties, metrics);
   }
 

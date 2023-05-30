@@ -92,8 +92,8 @@ public abstract class TestS3FileIOIntegrationBase {
   protected static void initialize() {
     Map<String, String> props = Maps.newHashMap();
     props.put(
-            S3FileIOProperties.CLIENT_FACTORY,
-            "org.apache.iceberg.aws.s3.DefaultS3FileIOAwsClientFactory");
+        S3FileIOProperties.CLIENT_FACTORY,
+        "org.apache.iceberg.aws.s3.DefaultS3FileIOAwsClientFactory");
     clientFactory = S3FileIOAwsClientFactories.initialize(props);
     kms = AwsClientFactories.defaultFactory().kms();
     s3Control = AwsIntegTestUtil.createS3ControlClient(AwsIntegTestUtil.testRegion());
@@ -259,8 +259,7 @@ public abstract class TestS3FileIOIntegrationBase {
     write(s3FileIO);
     validateRead(s3FileIO);
     GetObjectResponse response =
-            getObject(GetObjectRequest.builder().bucket(bucketName).key(objectKey).build())
-                    .response();
+        getObject(GetObjectRequest.builder().bucket(bucketName).key(objectKey).build()).response();
     Assert.assertEquals(ServerSideEncryption.AWS_KMS, response.serverSideEncryption());
     Assert.assertEquals(response.ssekmsKeyId(), kmsKeyArn);
   }
@@ -273,11 +272,10 @@ public abstract class TestS3FileIOIntegrationBase {
     write(s3FileIO);
     validateRead(s3FileIO);
     GetObjectResponse response =
-            getObject(GetObjectRequest.builder().bucket(bucketName).key(objectKey).build())
-                    .response();
+        getObject(GetObjectRequest.builder().bucket(bucketName).key(objectKey).build()).response();
     Assert.assertEquals(ServerSideEncryption.AWS_KMS, response.serverSideEncryption());
     ListAliasesResponse listAliasesResponse =
-            kms.listAliases(ListAliasesRequest.builder().keyId(response.ssekmsKeyId()).build());
+        kms.listAliases(ListAliasesRequest.builder().keyId(response.ssekmsKeyId()).build());
     Assert.assertTrue(listAliasesResponse.hasAliases());
     Assert.assertEquals(1, listAliasesResponse.aliases().size());
     Assert.assertEquals("alias/aws/s3", listAliasesResponse.aliases().get(0).aliasName());
@@ -294,7 +292,7 @@ public abstract class TestS3FileIOIntegrationBase {
     // generate md5
     MessageDigest digest = MessageDigest.getInstance("MD5");
     String md5 =
-            new String(encoder.encode(digest.digest(secretKey.getEncoded())), StandardCharsets.UTF_8);
+        new String(encoder.encode(digest.digest(secretKey.getEncoded())), StandardCharsets.UTF_8);
 
     S3FileIOProperties properties = new S3FileIOProperties();
     properties.setSseType(S3FileIOProperties.SSE_TYPE_CUSTOM);
@@ -304,15 +302,15 @@ public abstract class TestS3FileIOIntegrationBase {
     write(s3FileIO);
     validateRead(s3FileIO);
     GetObjectResponse response =
-            getObject(
-                            GetObjectRequest.builder()
-                                    .bucket(bucketName)
-                                    .key(objectKey)
-                                    .sseCustomerAlgorithm(ServerSideEncryption.AES256.name())
-                                    .sseCustomerKey(encodedKey)
-                                    .sseCustomerKeyMD5(md5)
-                                    .build())
-                    .response();
+        getObject(
+                GetObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(objectKey)
+                    .sseCustomerAlgorithm(ServerSideEncryption.AES256.name())
+                    .sseCustomerKey(encodedKey)
+                    .sseCustomerKeyMD5(md5)
+                    .build())
+            .response();
     Assert.assertNull(response.serverSideEncryption());
     Assert.assertEquals(ServerSideEncryption.AES256.name(), response.sseCustomerAlgorithm());
     Assert.assertEquals(md5, response.sseCustomerKeyMD5());
@@ -326,7 +324,7 @@ public abstract class TestS3FileIOIntegrationBase {
     write(s3FileIO);
     validateRead(s3FileIO);
     GetObjectAclResponse response =
-            getObjectAcl(GetObjectAclRequest.builder().bucket(bucketName).key(objectKey).build());
+        getObjectAcl(GetObjectAclRequest.builder().bucket(bucketName).key(objectKey).build());
     Assert.assertTrue(response.hasGrants());
     Assert.assertEquals(1, response.grants().size());
     Assert.assertEquals(Permission.FULL_CONTROL, response.grants().get(0).permission());
@@ -410,14 +408,14 @@ public abstract class TestS3FileIOIntegrationBase {
 
     List<Integer> scaleSizes = Lists.newArrayList(0, 5, 1000, 2500);
     scaleSizes
-            .parallelStream()
-            .forEach(
-                    scale -> {
-                      String scalePrefix = String.format("%s/%s/", deletePrefix, scale);
-                      createRandomObjects(scalePrefix, scale);
-                      s3FileIO.deletePrefix(scalePrefix);
-                      assertEquals(0L, Streams.stream(s3FileIO.listPrefix(scalePrefix)).count());
-                    });
+        .parallelStream()
+        .forEach(
+            scale -> {
+              String scalePrefix = String.format("%s/%s/", deletePrefix, scale);
+              createRandomObjects(scalePrefix, scale);
+              s3FileIO.deletePrefix(scalePrefix);
+              assertEquals(0L, Streams.stream(s3FileIO.listPrefix(scalePrefix)).count());
+            });
   }
 
   protected Random random() {

@@ -50,7 +50,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import org.apache.iceberg.aws.AwsProperties;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.assertj.core.api.Assertions;
 import org.junit.After;
@@ -198,7 +197,8 @@ public class TestS3AsyncOutputStream {
         new S3FileIOProperties(
             ImmutableMap.of(S3FileIOProperties.STAGING_DIRECTORY, newTmpDirectory));
     S3AsyncOutputStream stream =
-        new S3AsyncOutputStream(s3, randomURI(), newStagingDirectoryS3FileIOProperties, nullMetrics());
+        new S3AsyncOutputStream(
+            s3, randomURI(), newStagingDirectoryS3FileIOProperties, nullMetrics());
     stream.close();
   }
 

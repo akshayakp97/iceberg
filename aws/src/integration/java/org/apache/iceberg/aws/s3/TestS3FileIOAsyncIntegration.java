@@ -19,8 +19,6 @@
 package org.apache.iceberg.aws.s3;
 
 import java.util.concurrent.CompletableFuture;
-import org.apache.iceberg.aws.AwsClientFactory;
-import org.apache.iceberg.aws.AwsProperties;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import software.amazon.awssdk.core.ResponseInputStream;
@@ -50,14 +48,15 @@ public class TestS3FileIOAsyncIntegration extends TestS3FileIOIntegrationBase {
 
   private static S3AsyncClient s3(boolean refreshClient) {
     if (refreshClient) {
-      return clientFactory().s3Async();
+      return clientFactory().s3Async(false);
     } else {
       return s3;
     }
   }
 
   @Override
-  protected S3FileIO newS3FileIO(S3FileIOAwsClientFactory clientFactory, S3FileIOProperties s3FileIOProperties) {
+  protected S3FileIO newS3FileIO(
+      S3FileIOAwsClientFactory clientFactory, S3FileIOProperties s3FileIOProperties) {
     s3FileIOProperties.setAsyncClientEnabled(true);
     return new S3FileIO(clientFactory, s3FileIOProperties);
   }

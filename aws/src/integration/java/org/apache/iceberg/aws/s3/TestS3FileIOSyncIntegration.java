@@ -18,8 +18,6 @@
  */
 package org.apache.iceberg.aws.s3;
 
-import org.apache.iceberg.aws.AwsClientFactory;
-import org.apache.iceberg.aws.AwsProperties;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import software.amazon.awssdk.core.ResponseInputStream;
@@ -55,7 +53,8 @@ public class TestS3FileIOSyncIntegration extends TestS3FileIOIntegrationBase {
   }
 
   @Override
-  protected S3FileIO newS3FileIO(S3FileIOAwsClientFactory s3FileIOAwsClientFactory, S3FileIOProperties s3FileIOProperties) {
+  protected S3FileIO newS3FileIO(
+      S3FileIOAwsClientFactory s3FileIOAwsClientFactory, S3FileIOProperties s3FileIOProperties) {
     s3FileIOProperties.setAsyncClientEnabled(false);
     return new S3FileIO(s3FileIOAwsClientFactory, s3FileIOProperties);
   }

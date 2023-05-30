@@ -64,8 +64,8 @@ public class S3FileIO extends S3FileIOBase {
    *
    * <p>Calling {@link S3FileIO#initialize(Map)} will overwrite information set in this constructor.
    *
-   * @deprecated Use S3FileIO(AwsClientFactory)
    * @param s3 S3Client factory
+   * @deprecated Use S3FileIO(AwsClientFactory)
    */
   @Deprecated
   public S3FileIO(SerializableSupplier<S3Client> s3) {
@@ -75,8 +75,8 @@ public class S3FileIO extends S3FileIOBase {
   /**
    * Creates a S3FileIO instance backed by the S3 synchronous client.
    *
-   * @deprecated Use S3FileIO(S3FileIOAwsClientFactory, S3FileIOProperties)
    * @param s3 S3Client factory
+   * @deprecated Use S3FileIO(S3FileIOAwsClientFactory, S3FileIOProperties)
    */
   @Deprecated
   public S3FileIO(SerializableSupplier<S3Client> s3, S3FileIOProperties s3FileIOProperties) {
@@ -91,7 +91,8 @@ public class S3FileIO extends S3FileIOBase {
    * @param s3FileIOAwsClientFactory S3FileIOAwsClientFactory to vend S3 client
    * @param s3FileIOProperties S3 FileIO properties
    */
-  public S3FileIO(S3FileIOAwsClientFactory s3FileIOAwsClientFactory, S3FileIOProperties s3FileIOProperties) {
+  public S3FileIO(
+      S3FileIOAwsClientFactory s3FileIOAwsClientFactory, S3FileIOProperties s3FileIOProperties) {
     initializeDelegate(s3FileIOAwsClientFactory, s3FileIOProperties);
   }
 
@@ -102,7 +103,6 @@ public class S3FileIO extends S3FileIOBase {
     initializeDelegate(clientFactory, s3FileIOProperties);
     delegate().initialize(props);
   }
-
 
   private void initializeDelegate(Object clientFactory, S3FileIOProperties s3FileIOProperties) {
     if (this.delegate != null) {
@@ -121,14 +121,19 @@ public class S3FileIO extends S3FileIOBase {
     }
   }
 
-  private S3FileIOBase getDelegate(S3FileIOAwsClientFactory clientFactory, S3FileIOProperties s3FileIOProperties) {
+  private S3FileIOBase getDelegate(
+      S3FileIOAwsClientFactory clientFactory, S3FileIOProperties s3FileIOProperties) {
     if (s3FileIOProperties.isAsyncClientEnabled()) {
-      return new S3AsyncFileIO(clientFactory::s3Async, s3FileIOProperties);
+      final boolean isCrtEnabled = s3FileIOProperties.isAsyncClientCrtEnabled();
+      LOG.info(
+          "Using S3AsyncClient for S3FileIO with CRT {}", isCrtEnabled ? "enabled" : "disabled");
+      return new S3AsyncFileIO(() -> clientFactory.s3Async(isCrtEnabled), s3FileIOProperties);
     }
     return new S3SyncFileIO(clientFactory::s3, s3FileIOProperties);
   }
 
-  private S3FileIOBase getDelegate(AwsClientFactory clientFactory, S3FileIOProperties s3FileIOProperties) {
+  private S3FileIOBase getDelegate(
+      AwsClientFactory clientFactory, S3FileIOProperties s3FileIOProperties) {
     if (s3FileIOProperties.isAsyncClientEnabled()) {
       return new S3AsyncFileIO(clientFactory::s3Async, s3FileIOProperties);
     }

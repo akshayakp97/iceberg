@@ -105,7 +105,10 @@ class S3AsyncOutputStream extends PositionOutputStream {
 
   @SuppressWarnings("StaticAssignmentInConstructor")
   S3AsyncOutputStream(
-      S3AsyncClient s3, S3URI location, S3FileIOProperties s3FileIOProperties, MetricsContext metrics)
+      S3AsyncClient s3,
+      S3URI location,
+      S3FileIOProperties s3FileIOProperties,
+      MetricsContext metrics)
       throws IOException {
     if (executorService == null) {
       synchronized (S3AsyncOutputStream.class) {

@@ -30,7 +30,10 @@ public class S3AsyncInputFile extends BaseS3AsyncFile implements InputFile, Nati
   private Long length;
 
   public static S3AsyncInputFile fromLocation(
-      String location, S3AsyncClient client, S3FileIOProperties s3FileIOProperties, MetricsContext metrics) {
+      String location,
+      S3AsyncClient client,
+      S3FileIOProperties s3FileIOProperties,
+      MetricsContext metrics) {
     return new S3AsyncInputFile(
         client,
         new S3URI(location, s3FileIOProperties.bucketToAccessPointMapping()),

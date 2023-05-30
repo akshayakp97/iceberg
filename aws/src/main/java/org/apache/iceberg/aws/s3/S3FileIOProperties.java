@@ -35,11 +35,11 @@ import org.apache.iceberg.util.PropertyUtil;
 import org.apache.iceberg.util.SerializableMap;
 import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider;
 import software.amazon.awssdk.awscore.client.builder.AwsClientBuilder;
-import software.amazon.awssdk.core.client.builder.SdkClientBuilder;
 import software.amazon.awssdk.core.client.config.SdkAdvancedClientOption;
+import software.amazon.awssdk.services.s3.S3AsyncClientBuilder;
 import software.amazon.awssdk.services.s3.S3BaseClientBuilder;
-import software.amazon.awssdk.services.s3.S3ClientBuilder;
 import software.amazon.awssdk.services.s3.S3Configuration;
+import software.amazon.awssdk.services.s3.S3CrtAsyncClientBuilder;
 import software.amazon.awssdk.services.s3.model.ObjectCannedACL;
 import software.amazon.awssdk.services.s3.model.Tag;
 
@@ -388,6 +388,7 @@ public class S3FileIOProperties implements Serializable {
   private String endpoint;
 
   private boolean asyncClientEnabled;
+  private boolean asyncClientCrtEnabled;
   private final boolean isRemoteSigningEnabled;
   private final Map<String, String> allProperties;
 
@@ -420,6 +421,7 @@ public class S3FileIOProperties implements Serializable {
     this.isAccelerationEnabled = ACCELERATION_ENABLED_DEFAULT;
     this.isRemoteSigningEnabled = REMOTE_SIGNING_ENABLED_DEFAULT;
     this.asyncClientEnabled = S3FILEIO_ASYNC_CLIENT_ENABLED_DEFAULT;
+    this.asyncClientCrtEnabled = S3FILEIO_ASYNC_CLIENT_CRT_ENABLED_DEFAULT;
     this.allProperties = Maps.newHashMap();
 
     ValidationException.check(
@@ -509,8 +511,13 @@ public class S3FileIOProperties implements Serializable {
         PropertyUtil.propertyAsBoolean(
             properties, REMOTE_SIGNING_ENABLED, REMOTE_SIGNING_ENABLED_DEFAULT);
     this.asyncClientEnabled =
-            PropertyUtil.propertyAsBoolean(
-                    properties, S3FILEIO_ASYNC_CLIENT_ENABLED, S3FILEIO_ASYNC_CLIENT_ENABLED_DEFAULT);
+        PropertyUtil.propertyAsBoolean(
+            properties, S3FILEIO_ASYNC_CLIENT_ENABLED, S3FILEIO_ASYNC_CLIENT_ENABLED_DEFAULT);
+    this.asyncClientCrtEnabled =
+        PropertyUtil.propertyAsBoolean(
+            properties,
+            S3FILEIO_ASYNC_CLIENT_CRT_ENABLED,
+            S3FILEIO_ASYNC_CLIENT_CRT_ENABLED_DEFAULT);
     this.allProperties = SerializableMap.copyOf(properties);
 
     ValidationException.check(
@@ -658,6 +665,14 @@ public class S3FileIOProperties implements Serializable {
     this.asyncClientEnabled = enabled;
   }
 
+  public boolean isAsyncClientCrtEnabled() {
+    return asyncClientCrtEnabled;
+  }
+
+  public void setAsyncClientCrtEnabled(boolean enabled) {
+    this.asyncClientCrtEnabled = enabled;
+  }
+
   public Set<Tag> deleteTags() {
     return deleteTags;
   }
@@ -712,6 +727,12 @@ public class S3FileIOProperties implements Serializable {
             : awsClientProperties.credentialsProvider(accessKeyId, secretAccessKey, sessionToken));
   }
 
+  public <T extends S3CrtAsyncClientBuilder> void applyCredentialConfigurations(
+      AwsClientProperties awsClientProperties, T builder) {
+    builder.credentialsProvider(
+        awsClientProperties.credentialsProvider(accessKeyId, secretAccessKey, sessionToken));
+  }
+
   /**
    * Configure services settings for an S3 client. The settings include: s3DualStack,
    * s3UseArnRegion, s3PathStyleAccess, and s3Acceleration
@@ -723,6 +744,17 @@ public class S3FileIOProperties implements Serializable {
    * </pre>
    */
   public <T extends S3BaseClientBuilder<T, ?>> void applyServiceConfigurations(T builder) {
+    builder
+        .dualstackEnabled(isDualStackEnabled)
+        .serviceConfiguration(
+            S3Configuration.builder()
+                .pathStyleAccessEnabled(isPathStyleAccess)
+                .useArnRegionEnabled(isUseArnRegionEnabled)
+                .accelerateModeEnabled(isAccelerationEnabled)
+                .build());
+  }
+
+  public <T extends S3AsyncClientBuilder> void applyServiceConfigurations(T builder) {
     builder
         .dualstackEnabled(isDualStackEnabled)
         .serviceConfiguration(
@@ -761,6 +793,17 @@ public class S3FileIOProperties implements Serializable {
    * </pre>
    */
   public <T extends AwsClientBuilder> void applyEndpointConfigurations(T builder) {
+    if (endpoint != null) {
+      builder.endpointOverride(URI.create(endpoint));
+    }
+  }
+
+  public <T extends S3CrtAsyncClientBuilder> void applyEndpointConfigurations(T builder) {
+    configureEndpoint(builder, endpoint);
+  }
+
+  @SuppressWarnings("checkstyle:HiddenField")
+  private <T extends S3CrtAsyncClientBuilder> void configureEndpoint(T builder, String endpoint) {
     if (endpoint != null) {
       builder.endpointOverride(URI.create(endpoint));
     }

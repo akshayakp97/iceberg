@@ -58,15 +58,35 @@ class DefaultS3FileIOAwsClientFactory implements S3FileIOAwsClientFactory {
   }
 
   @Override
-  public S3AsyncClient s3Async() {
+  public S3AsyncClient s3Async(boolean useCrt) {
+    if (useCrt) {
+      return s3CrtAsync();
+    } else {
+      return s3Async();
+    }
+  }
+
+  private S3AsyncClient s3Async() {
     return S3AsyncClient.builder()
-            .applyMutation(awsClientProperties::applyClientRegionConfiguration)
-            .applyMutation(s3FileIOProperties::applyEndpointConfigurations)
-            .applyMutation(s3FileIOProperties::applyServiceConfigurations)
-            .applyMutation(s3ClientBuilder ->
-                    s3FileIOProperties.applyCredentialConfigurations(
-                            awsClientProperties, s3ClientBuilder))
-            .applyMutation(s3FileIOProperties::applySignerConfiguration)
-            .build();
+        .applyMutation(awsClientProperties::applyClientRegionConfiguration)
+        .applyMutation(s3FileIOProperties::applyEndpointConfigurations)
+        .applyMutation(s3FileIOProperties::applyServiceConfigurations)
+        .applyMutation(
+            s3ClientBuilder ->
+                s3FileIOProperties.applyCredentialConfigurations(
+                    awsClientProperties, s3ClientBuilder))
+        .applyMutation(s3FileIOProperties::applySignerConfiguration)
+        .build();
+  }
+
+  private S3AsyncClient s3CrtAsync() {
+    return S3AsyncClient.crtBuilder()
+        .applyMutation(awsClientProperties::applyClientRegionConfiguration)
+        .applyMutation(s3FileIOProperties::applyEndpointConfigurations)
+        .applyMutation(
+            s3ClientBuilder ->
+                s3FileIOProperties.applyCredentialConfigurations(
+                    awsClientProperties, s3ClientBuilder))
+        .build();
   }
 }

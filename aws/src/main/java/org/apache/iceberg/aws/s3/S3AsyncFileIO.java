@@ -452,7 +452,8 @@ public class S3AsyncFileIO extends S3FileIOBase {
     if (s3 == null) {
       Object clientFactory = S3FileIOAwsClientFactories.initialize(props);
       if (clientFactory instanceof S3FileIOAwsClientFactory) {
-        this.s3 = ((S3FileIOAwsClientFactory) clientFactory)::s3Async;
+        boolean asyncClientCrtEnabled = s3FileIOProperties.isAsyncClientCrtEnabled();
+        this.s3 = () -> ((S3FileIOAwsClientFactory) clientFactory).s3Async(asyncClientCrtEnabled);
       }
       if (clientFactory instanceof AwsClientFactory) {
         this.s3 = ((AwsClientFactory) clientFactory)::s3Async;

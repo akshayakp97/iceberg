@@ -62,7 +62,10 @@ class S3AsyncInputStream extends SeekableInputStream implements RangeReadable {
   }
 
   S3AsyncInputStream(
-      S3AsyncClient s3, S3URI location, S3FileIOProperties s3FileIOProperties, MetricsContext metrics) {
+      S3AsyncClient s3,
+      S3URI location,
+      S3FileIOProperties s3FileIOProperties,
+      MetricsContext metrics) {
     this.s3 = s3;
     this.location = location;
     this.s3FileIOProperties = s3FileIOProperties;
