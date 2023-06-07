@@ -25,9 +25,12 @@ import org.apache.spark.sql.connector.read.InputPartition;
 import org.apache.spark.sql.connector.read.PartitionReader;
 import org.apache.spark.sql.connector.read.PartitionReaderFactory;
 import org.apache.spark.sql.vectorized.ColumnarBatch;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 class SparkColumnarReaderFactory implements PartitionReaderFactory {
   private final int batchSize;
+  private static final Logger LOG = LoggerFactory.getLogger(SparkColumnarReaderFactory.class);
 
   SparkColumnarReaderFactory(int batchSize) {
     Preconditions.checkArgument(batchSize > 1, "Batch size must be > 1");
@@ -49,6 +52,7 @@ class SparkColumnarReaderFactory implements PartitionReaderFactory {
     SparkInputPartition partition = (SparkInputPartition) inputPartition;
 
     if (partition.allTasksOfType(FileScanTask.class)) {
+      LOG.info("returning batch data reader for partition: {} and batch size: {}", partition, batchSize);
       return new BatchDataReader(partition, batchSize);
 
     } else {

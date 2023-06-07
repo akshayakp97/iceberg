@@ -77,6 +77,7 @@ public abstract class SparkTestBase extends SparkTestHelperBase {
             .config(SQLConf.PARTITION_OVERWRITE_MODE().key(), "dynamic")
             .config("spark.hadoop." + METASTOREURIS.varname, hiveConf.get(METASTOREURIS.varname))
             .config("spark.sql.legacy.respectNullabilityInTextDatasetConversion", "true")
+            .config("spark.driver.bindAddress", "127.0.0.1")
             .enableHiveSupport()
             .getOrCreate();
 

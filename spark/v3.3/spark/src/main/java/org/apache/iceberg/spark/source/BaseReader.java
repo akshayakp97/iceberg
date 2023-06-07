@@ -25,6 +25,8 @@ import java.nio.ByteBuffer;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.avro.generic.GenericData;
@@ -48,7 +50,9 @@ import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.io.InputFile;
 import org.apache.iceberg.mapping.NameMapping;
 import org.apache.iceberg.mapping.NameMappingParser;
+import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
+import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.spark.SparkSchemaUtil;
 import org.apache.iceberg.types.Type;
@@ -83,6 +87,9 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
 
   private Map<String, InputFile> lazyInputFiles;
   private CloseableIterator<T> currentIterator;
+  private List<CompletableFuture<CloseableIterator<T>>> iteratorFutures;
+  // TODO: should this be a thread safe data structure?
+  private List<CloseableIterator<T>> iterators = Lists.newArrayList();;
   private T current = null;
   private TaskT currentTask = null;
 
@@ -103,6 +110,8 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     this.nameMapping =
         nameMappingString != null ? NameMappingParser.fromJson(nameMappingString) : null;
     this.counter = new DeleteCounter();
+    this.iteratorFutures = prefetchInputFiles();
+    LOG.info("Reading table: {} using scan task group: {}", table.name(), taskGroup);
   }
 
   protected abstract CloseableIterator<T> open(TaskT task);
@@ -129,9 +138,25 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     return counter;
   }
 
+  private void iterateTasks() {
+    // maybe adding pub sub will make it better
+    Preconditions.checkState(iteratorFutures != null);
+    iteratorFutures
+            .forEach(future -> {
+              try {
+                CloseableIterator<T> iterator = future.join();
+                iterators.add(iterator);
+              } catch (CompletionException e) {
+                LOG.error("exception encountered while attempting to join future: {}", e);
+                throw e;
+              }
+            });
+  }
+
   public boolean next() throws IOException {
     try {
       while (true) {
+        // current iterator is VectorizedParquetReader
         if (currentIterator.hasNext()) {
           this.current = currentIterator.next();
           return true;
@@ -162,6 +187,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
 
   @Override
   public void close() throws IOException {
+    LOG.info("closing reader");
     InputFileBlockHolder.unset();
 
     // close the current iterator
@@ -174,6 +200,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   }
 
   protected InputFile getInputFile(String location) {
+    LOG.info("getting input file for location: {}", location);
     return inputFiles().get(location);
   }
 
@@ -187,10 +214,45 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
 
       Map<String, InputFile> files = Maps.newHashMapWithExpectedSize(taskGroup.tasks().size());
       decryptedFiles.forEach(decrypted -> files.putIfAbsent(decrypted.location(), decrypted));
+      LOG.info("assigning input files: {}", files);
       this.lazyInputFiles = ImmutableMap.copyOf(files);
     }
 
     return lazyInputFiles;
+  }
+
+  private List<CompletableFuture<CloseableIterator<T>>> prefetchInputFiles() {
+    // in parallel, try to open the files for each task in task group
+    // i'm not sure if we want to open, just loading should be fine
+
+    // in parallel, call open() against each task and save all the iterables in a blocking queue or something
+    // and then also update the next() method to reference this queue instead of calling open again
+//   CompletableFuture.supplyAsync(() -> {
+//     Stream.of(this.tasks).
+//   });
+   // you probably need to split the tasks iterator to be divided among threads
+    this.tasks.forEachRemaining(
+            task -> {
+              CompletableFuture<CloseableIterator<T>> iteratorFuture =
+              CompletableFuture.supplyAsync(
+                      () -> open(task))
+                      .whenComplete((result, exception) -> {
+                        if (exception != null) {
+                          // Exception observed here will be thrown as part of
+                          // CompletionException when we join completable futures.
+                          if (!task.isDataTask()) {
+                            String filePaths =
+                                    referencedFiles(task)
+                                            .map(file -> file.path().toString())
+                                            .collect(Collectors.joining(", "));
+                            LOG.error("Error reading file(s): {}", filePaths, exception);
+                          }
+                        }
+                      });
+              iteratorFutures.add(iteratorFuture);
+            }
+    );
+    return iteratorFutures;
   }
 
   private EncryptedInputFile toEncryptedInputFile(ContentFile<?> file) {
