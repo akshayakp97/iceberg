@@ -52,7 +52,8 @@ class SparkColumnarReaderFactory implements PartitionReaderFactory {
     SparkInputPartition partition = (SparkInputPartition) inputPartition;
 
     if (partition.allTasksOfType(FileScanTask.class)) {
-      LOG.info("returning batch data reader for partition: {} and batch size: {}", partition, batchSize);
+      LOG.info(
+          "returning batch data reader for partition: {} and batch size: {}", partition, batchSize);
       return new BatchDataReader(partition, batchSize);
 
     } else {

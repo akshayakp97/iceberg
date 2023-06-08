@@ -27,6 +27,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -87,7 +88,7 @@ public class TestBaseReader {
   // Main reader class to test base class iteration logic.
   // Keeps track of iterator closure.
   private static class ClosureTrackingReader extends BaseReader<Integer, FileScanTask> {
-    private Map<String, CloseableIntegerRange> tracker = Maps.newHashMap();
+    private static final Map<String, CloseableIntegerRange> TRACKER = Maps.newHashMap();
 
     ClosureTrackingReader(Table table, List<FileScanTask> tasks) {
       super(table, new BaseCombinedScanTask(tasks), null, null, false);
@@ -101,16 +102,16 @@ public class TestBaseReader {
     @Override
     protected CloseableIterator<Integer> open(FileScanTask task) {
       CloseableIntegerRange intRange = new CloseableIntegerRange(task.file().recordCount());
-      tracker.put(getKey(task), intRange);
+      TRACKER.put(getKey(task), intRange);
       return intRange;
     }
 
     public Boolean isIteratorClosed(FileScanTask task) {
-      return tracker.get(getKey(task)).closed;
+      return TRACKER.get(getKey(task)).closed;
     }
 
     public Boolean hasIterator(FileScanTask task) {
-      return tracker.containsKey(getKey(task));
+      return TRACKER.containsKey(getKey(task));
     }
 
     private String getKey(FileScanTask task) {
@@ -179,10 +180,11 @@ public class TestBaseReader {
 
     reader.close();
 
-    tasks.forEach(
-        t ->
-            Assert.assertFalse(
-                "Iterator should not be created eagerly for tasks", reader.hasIterator(t)));
+    // commenting as we create iterator eagerly
+    //    tasks.forEach(
+    //        t ->
+    //            Assert.assertFalse(
+    //                "Iterator should not be created eagerly for tasks", reader.hasIterator(t)));
   }
 
   @Test
@@ -201,13 +203,21 @@ public class TestBaseReader {
 
     reader.close();
 
+    AtomicInteger atomicInteger1 = new AtomicInteger();
+    AtomicInteger atomicInteger2 = new AtomicInteger();
     // Some tasks might have not been opened yet, so we don't have corresponding tracker for it.
     // But all that have been created must be closed.
     tasks.forEach(
         t -> {
           if (reader.hasIterator(t)) {
-            Assert.assertTrue(
-                "Iterator should be closed after read exhausion", reader.isIteratorClosed(t));
+            atomicInteger1.set(atomicInteger1.get() + 1);
+            if (reader.isIteratorClosed(t)) {
+              atomicInteger2.set(atomicInteger2.get() + 1);
+            }
+            Assert.assertEquals(atomicInteger1.get(), atomicInteger2.get());
+            //            Assert.assertTrue(
+            //                "Iterator should be closed after read exhausion",
+            // reader.isIteratorClosed(t));
           }
         });
   }
@@ -222,7 +232,7 @@ public class TestBaseReader {
 
     // Total 100 elements, only 5 iterators have been created
     for (int i = 0; i < 45; i++) {
-      Assert.assertTrue("eader should have some element", reader.next());
+      Assert.assertTrue("reader should have some element", reader.next());
       Assert.assertNotNull("Reader should return non-null value", reader.get());
     }
 
@@ -233,10 +243,12 @@ public class TestBaseReader {
             "Iterator should be closed after read exhausion",
             reader.isIteratorClosed(tasks.get(i)));
       }
-      for (int i = 5; i < 10; i++) {
-        Assert.assertFalse(
-            "Iterator should not be created eagerly for tasks", reader.hasIterator(tasks.get(i)));
-      }
+      // commenting this code as we are eagerly creating iterators for tasks
+      //      for (int i = 5; i < 10; i++) {
+      //        Assert.assertFalse(
+      //            "Iterator should not be created eagerly for tasks",
+      // reader.hasIterator(tasks.get(i)));
+      //      }
     }
   }
 
