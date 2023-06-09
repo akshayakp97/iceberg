@@ -88,6 +88,8 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
 
   private Map<String, InputFile> lazyInputFiles;
   private CloseableIterator<T> currentIterator;
+  private long nextMethodStartTime;
+  private final long constructorInitiationTime;
   private Queue<CompletableFuture<CloseableIterator<T>>> iteratorFutures;
   // TODO: should this be a thread safe data structure?
   private final LinkedBlockingQueue<CloseableIterator<T>> iterators = new LinkedBlockingQueue<>();
@@ -112,6 +114,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
         nameMappingString != null ? NameMappingParser.fromJson(nameMappingString) : null;
     this.counter = new DeleteCounter();
     this.iteratorFutures = prefetchInputFiles();
+    constructorInitiationTime = System.currentTimeMillis();
     LOG.info("Reading table: {} using scan task group: {}", table.name(), taskGroup);
   }
 
@@ -169,8 +172,14 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
         currentIterator = iterators.poll();
       } else if (iterators.peek() == null && iteratorFutures.peek() == null) {
         currentIterator.close();
+        LOG.info("finished iterating over all iterators");
+        long nextMethodEndTime = System.currentTimeMillis();
+        long duration = nextMethodEndTime - nextMethodStartTime;
+        LOG.info("total time taken for next method: {} ms", duration);
         return false;
       } else {
+        nextMethodStartTime = System.currentTimeMillis();
+        LOG.info("iterating over files");
         iterateTasks();
       }
     }
@@ -231,6 +240,9 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
       throw e;
     }
 
+    long closeEndTime = System.currentTimeMillis();
+    long duration = closeEndTime - constructorInitiationTime;
+    LOG.info("total time taken in base reader: {}", duration);
     // need to call close on every open call
 
     // exhaust the task iterator
