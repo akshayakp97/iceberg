@@ -28,7 +28,10 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.avro.generic.GenericData;
@@ -55,6 +58,8 @@ import org.apache.iceberg.mapping.NameMappingParser;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
+import org.apache.iceberg.relocated.com.google.common.util.concurrent.MoreExecutors;
+import org.apache.iceberg.relocated.com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.iceberg.spark.SparkSchemaUtil;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types.NestedField;
@@ -92,7 +97,8 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private final long constructorInitiationTime;
   private Queue<CompletableFuture<CloseableIterator<T>>> iteratorFutures;
   // TODO: should this be a thread safe data structure?
-  private final LinkedBlockingQueue<CloseableIterator<T>> iterators = new LinkedBlockingQueue<>();
+  private LinkedBlockingQueue<CloseableIterator<T>> iterators = new LinkedBlockingQueue<>();
+  private ExecutorService executorService;
   private T current = null;
   private TaskT currentTask = null;
 
@@ -113,6 +119,15 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     this.nameMapping =
         nameMappingString != null ? NameMappingParser.fromJson(nameMappingString) : null;
     this.counter = new DeleteCounter();
+    executorService =
+        MoreExecutors.getExitingExecutorService(
+            (ThreadPoolExecutor)
+                Executors.newFixedThreadPool(
+                    Runtime.getRuntime().availableProcessors(),
+                    new ThreadFactoryBuilder()
+                        .setDaemon(true)
+                        .setNameFormat("iceberg-base-reader-%d")
+                        .build()));
     this.iteratorFutures = prefetchInputFiles();
     constructorInitiationTime = System.currentTimeMillis();
     LOG.info("Reading table: {} using scan task group: {}", table.name(), taskGroup);
@@ -146,19 +161,31 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private void iterateTasks() {
     // maybe adding pub sub will make it better
     Preconditions.checkState(iteratorFutures != null);
-    while (true) {
-      if (iteratorFutures.peek() == null) {
-        return;
-      }
-      CompletableFuture<CloseableIterator<T>> iteratorFuture = iteratorFutures.poll();
-      try {
-        CloseableIterator<T> iterator = iteratorFuture.join();
-        iterators.add(iterator);
-      } catch (CompletionException e) {
-        LOG.error("exception encountered while attempting to join future: {}", e);
-        throw e;
-      }
+    if (iteratorFutures.peek() == null) {
+      return;
     }
+//    iterators = iteratorFutures
+//        .parallelStream()
+//        .map(
+//            (iteratorFuture) -> {
+//              try {
+//                return iteratorFuture.join();
+//              } catch (CompletionException e) {
+//                LOG.error("exception encountered while attempting to join future: {}", e);
+//                throw e;
+//              }
+//            })
+//            .collect(Collectors.toCollection(LinkedBlockingQueue::new));
+    CompletableFuture.supplyAsync(() -> iteratorFutures.poll())
+            .thenApply((iteratorFuture) -> {
+              try {
+                return iteratorFuture.join();
+              } catch (CompletionException e) {
+                LOG.error("exception encountered while attempting to join future: {}", e);
+                throw e;
+              }
+            }).thenApply((iterator)-> iterators.add(iterator)).join();
+
   }
 
   // TODO: not sure why i see current iterator null here
@@ -288,7 +315,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     this.tasks.forEachRemaining(
         task -> {
           CompletableFuture<CloseableIterator<T>> iteratorFuture =
-              CompletableFuture.supplyAsync(() -> open(task))
+              CompletableFuture.supplyAsync(() -> open(task), executorService)
                   .whenComplete(
                       (result, exception) -> {
                         if (exception != null) {
