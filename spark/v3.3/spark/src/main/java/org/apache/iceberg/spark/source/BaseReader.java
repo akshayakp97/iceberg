@@ -19,13 +19,18 @@
 package org.apache.iceberg.spark.source;
 
 import java.io.Closeable;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
@@ -39,6 +44,7 @@ import org.apache.avro.util.Utf8;
 import org.apache.iceberg.ContentFile;
 import org.apache.iceberg.ContentScanTask;
 import org.apache.iceberg.DeleteFile;
+import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.MetadataColumns;
 import org.apache.iceberg.Partitioning;
 import org.apache.iceberg.ScanTask;
@@ -53,6 +59,7 @@ import org.apache.iceberg.encryption.EncryptedFiles;
 import org.apache.iceberg.encryption.EncryptedInputFile;
 import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.io.InputFile;
+import org.apache.iceberg.io.SeekableInputStream;
 import org.apache.iceberg.mapping.NameMapping;
 import org.apache.iceberg.mapping.NameMappingParser;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
@@ -129,6 +136,11 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
                         .setNameFormat("iceberg-base-reader-%d")
                         .build()));
     this.iteratorFutures = prefetchInputFiles();
+    try {
+      prefetchS3Files();
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
     constructorInitiationTime = System.currentTimeMillis();
     LOG.info("Reading table: {} using scan task group: {}", table.name(), taskGroup);
   }
@@ -164,28 +176,30 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     if (iteratorFutures.peek() == null) {
       return;
     }
-//    iterators = iteratorFutures
-//        .parallelStream()
-//        .map(
-//            (iteratorFuture) -> {
-//              try {
-//                return iteratorFuture.join();
-//              } catch (CompletionException e) {
-//                LOG.error("exception encountered while attempting to join future: {}", e);
-//                throw e;
-//              }
-//            })
-//            .collect(Collectors.toCollection(LinkedBlockingQueue::new));
+    //    iterators = iteratorFutures
+    //        .parallelStream()
+    //        .map(
+    //            (iteratorFuture) -> {
+    //              try {
+    //                return iteratorFuture.join();
+    //              } catch (CompletionException e) {
+    //                LOG.error("exception encountered while attempting to join future: {}", e);
+    //                throw e;
+    //              }
+    //            })
+    //            .collect(Collectors.toCollection(LinkedBlockingQueue::new));
     CompletableFuture.supplyAsync(() -> iteratorFutures.poll())
-            .thenApply((iteratorFuture) -> {
+        .thenApply(
+            (iteratorFuture) -> {
               try {
                 return iteratorFuture.join();
               } catch (CompletionException e) {
                 LOG.error("exception encountered while attempting to join future: {}", e);
                 throw e;
               }
-            }).thenApply((iterator)-> iterators.add(iterator)).join();
-
+            })
+        .thenApply((iterator) -> iterators.add(iterator))
+        .join();
   }
 
   // TODO: not sure why i see current iterator null here
@@ -298,6 +312,45 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     }
 
     return lazyInputFiles;
+  }
+
+  private void prefetchS3Files() throws IOException {
+    LinkedBlockingQueue<InputFile> inputFiles =
+        taskGroup.tasks().stream()
+            .flatMap(this::referencedFiles)
+            .map(file -> table.io().newInputFile(file.path().toString()))
+            .collect(Collectors.toCollection(LinkedBlockingQueue::new));
+
+    Path tempDir = Files.createTempDirectory("iceberg_files");
+
+    CompletableFuture.supplyAsync(inputFiles::poll)
+        .thenApply(
+            inputFile -> {
+              SeekableInputStream inputStream = inputFile.newStream();
+              try {
+                byte[] targetArray = new byte[inputStream.available()];
+                inputStream.read(targetArray);
+                File parquetFile =
+                    new File(
+                        tempDir.toString(),
+                        FileFormat.PARQUET.addExtension(UUID.randomUUID().toString()));
+                FileOutputStream outputStream = new FileOutputStream(parquetFile.getName());
+                LOG.info("writing file to output file: {}", parquetFile);
+                outputStream.write(targetArray);
+                outputStream.close();
+                return null;
+              } catch (IOException e) {
+                throw new RuntimeException(e);
+              }
+            })
+        .handle(
+            (o, throwable) -> {
+              if (throwable != null) {
+                return throwable;
+              }
+              return null;
+            })
+        .join();
   }
 
   private Queue<CompletableFuture<CloseableIterator<T>>> prefetchInputFiles() {
