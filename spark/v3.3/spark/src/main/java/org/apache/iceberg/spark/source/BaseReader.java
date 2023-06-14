@@ -19,8 +19,6 @@
 package org.apache.iceberg.spark.source;
 
 import java.io.Closeable;
-import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.net.URI;
@@ -278,47 +276,6 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
       this.s3ToLocal.put(inputFile.location(), outputFile.location());
       inputStream.close();
       os.close();
-    } catch (IOException | URISyntaxException e) {
-      throw new RuntimeException(e);
-    }
-  }
-
-  private void downloadFile(InputFile inputFile) {
-    LOG.info("supply async for input file: {}", inputFile.location());
-    SeekableInputStream inputStream = inputFile.newStream();
-    try {
-      String filename = getFileName(inputFile.location());
-      File parquetFile = new File(tempDir.toString(), FileFormat.PARQUET.addExtension(filename));
-      if (parquetFile.exists()) {
-        if (parquetFile.length() != 0) {
-          LOG.info("file already exists: {}", parquetFile);
-          return;
-        }
-      } else {
-        if (!parquetFile.createNewFile()) {
-          LOG.error("could not create file : {}", parquetFile.getName());
-          throw new RuntimeException(
-              String.format("could not create file : %s", parquetFile.getName()));
-        }
-      }
-      FileOutputStream outputStream = new FileOutputStream(parquetFile.getAbsolutePath());
-
-      LOG.info("writing file to output file: {}", parquetFile);
-
-      ByteStreams.copy(inputStream, outputStream);
-      // we need to keep a mapping of the s3 file location and the local file
-      // we open the referenced files for a given task. A task has reference to the s3
-      // files
-      // this map will help us reference the s3 file to a local file
-      // this.s3ToLocal.put(inputFile.location(), parquetFile);
-      outputStream.close();
-      inputStream.close();
-      // TODO: open the file and read and check
-      if (parquetFile.length() == 0) {
-        String errorMsg =
-            String.format("file length still zero after writing: %s", parquetFile.getName());
-        throw new RuntimeException(errorMsg);
-      }
     } catch (IOException | URISyntaxException e) {
       throw new RuntimeException(e);
     }
