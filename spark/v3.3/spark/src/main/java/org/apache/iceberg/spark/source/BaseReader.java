@@ -23,6 +23,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -30,7 +32,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
@@ -61,6 +62,7 @@ import org.apache.iceberg.encryption.EncryptedFiles;
 import org.apache.iceberg.encryption.EncryptedInputFile;
 import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.io.InputFile;
+import org.apache.iceberg.io.OutputFile;
 import org.apache.iceberg.io.ResolvingFileIO;
 import org.apache.iceberg.io.SeekableInputStream;
 import org.apache.iceberg.mapping.NameMapping;
@@ -150,20 +152,12 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
                         .setNameFormat("iceberg-base-reader-%d")
                         .build()));
     // this.iteratorFutures = prefetchInputFiles();
+    constructorInitiationTime = System.currentTimeMillis();
     try {
-      tempDir = Files.createTempDirectory("iceberg_files");
-      // TODO: you can check if the files have been downloaded already
-      completableFutureList = prefetchS3Files();
-
-      LOG.info("attempting to get downloaded s3 files....might block");
-      completableFutureList.stream().map(CompletableFuture::join).collect(Collectors.toList());
-      s3DownloadEndTime = System.currentTimeMillis();
-      LOG.info("total time to download s3 files: {}", s3DownloadEndTime - s3DownloadStartTime);
-
+      tempDir = Files.createTempDirectory(table.name());
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
-    constructorInitiationTime = System.currentTimeMillis();
     LOG.info("Reading table: {} using scan task group: {}", table.name(), taskGroup);
   }
 
@@ -251,7 +245,17 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   public boolean next() throws IOException {
     try {
       LOG.info("at next method");
-      Map<String, File> map = this.s3ToLocal;
+      try {
+        // TODO: you can check if the files have been downloaded already
+        completableFutureList = prefetchS3Files();
+        LOG.info("attempting to get downloaded s3 files....might block");
+        completableFutureList.stream().map(CompletableFuture::join).collect(Collectors.toList());
+        s3DownloadEndTime = System.currentTimeMillis();
+        LOG.info("total time to download s3 files: {}", s3DownloadEndTime - s3DownloadStartTime);
+
+      } catch (IOException e) {
+        throw new RuntimeException(e);
+      }
       while (true) {
         if (currentIterator.hasNext()) {
           this.current = currentIterator.next();
@@ -278,6 +282,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   }
 
   public T get() {
+    LOG.info("returning record: {}", current);
     return current;
   }
 
@@ -352,11 +357,22 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     LOG.info("supply async for input file: {}", inputFile.location());
     SeekableInputStream inputStream = inputFile.newStream();
     try {
-      File parquetFile =
-          new File(
-              tempDir.toString(), FileFormat.PARQUET.addExtension(UUID.randomUUID().toString()));
+      String filename = getFileName(inputFile.location());
+      File parquetFile = new File(tempDir.toString(), FileFormat.PARQUET.addExtension(filename));
+      if (parquetFile.exists()) {
+        if (parquetFile.length() != 0) {
+          LOG.info("file already exists: {}", parquetFile);
+          return;
+        }
+      } else {
+        if (!parquetFile.createNewFile()) {
+          LOG.error("could not create file : {}", parquetFile.getName());
+          throw new RuntimeException(
+              String.format("could not create file : %s", parquetFile.getName()));
+        }
+      }
       FileOutputStream outputStream = new FileOutputStream(parquetFile.getAbsolutePath());
-      parquetFile.createNewFile();
+
       LOG.info("writing file to output file: {}", parquetFile);
 
       ByteStreams.copy(inputStream, outputStream);
@@ -367,9 +383,26 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
       this.s3ToLocal.put(inputFile.location(), parquetFile);
       outputStream.close();
       inputStream.close();
-    } catch (IOException e) {
+      // TODO: open the file and read and check
+      if (parquetFile.length() == 0) {
+        String errorMsg =
+            String.format("file length still zero after writing: %s", parquetFile.getName());
+        throw new RuntimeException(errorMsg);
+      }
+    } catch (IOException | URISyntaxException e) {
       throw new RuntimeException(e);
     }
+  }
+
+  private String getFileName(String fileLocation) throws URISyntaxException {
+    URI uri = new URI(fileLocation);
+    String path = uri.normalize().getPath();
+    int idx = path.lastIndexOf("/");
+    String filename = path;
+    if (idx >= 0) {
+      filename = path.substring(idx + 1, path.length());
+    }
+    return filename;
   }
 
   protected InputFile getInputFile(String location) {
@@ -382,8 +415,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     Map<String, String> properties = Maps.newHashMap();
     fileIO.initialize(properties);
     fileIO.setConf(new Configuration());
-    // fileIO.setConf(new HdfsConfiguration());
-    return fileIO.newInputFile(localFile.getAbsolutePath());
+    return fileIO.newInputFile("file:/" + localFile.getPath());
   }
 
   private Queue<CompletableFuture<CloseableIterator<T>>> prefetchInputFiles() {
