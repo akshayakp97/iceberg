@@ -96,7 +96,7 @@ public class TestBaseReader {
 
     @Override
     protected Stream<ContentFile<?>> referencedFiles(FileScanTask task) {
-      return Stream.of();
+      return Stream.concat(Stream.of(task.file()), task.deletes().stream());
     }
 
     @Override

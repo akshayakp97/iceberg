@@ -37,10 +37,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.util.Utf8;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.iceberg.ContentFile;
 import org.apache.iceberg.ContentScanTask;
 import org.apache.iceberg.DeleteFile;
@@ -59,12 +61,14 @@ import org.apache.iceberg.encryption.EncryptedFiles;
 import org.apache.iceberg.encryption.EncryptedInputFile;
 import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.io.InputFile;
+import org.apache.iceberg.io.ResolvingFileIO;
 import org.apache.iceberg.io.SeekableInputStream;
 import org.apache.iceberg.mapping.NameMapping;
 import org.apache.iceberg.mapping.NameMappingParser;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
+import org.apache.iceberg.relocated.com.google.common.io.ByteStreams;
 import org.apache.iceberg.relocated.com.google.common.util.concurrent.MoreExecutors;
 import org.apache.iceberg.relocated.com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.iceberg.spark.SparkSchemaUtil;
@@ -106,8 +110,16 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   // TODO: should this be a thread safe data structure?
   private LinkedBlockingQueue<CloseableIterator<T>> iterators = new LinkedBlockingQueue<>();
   private ExecutorService executorService;
+  private long s3DownloadStartTime;
+  private Map<String, File> s3ToLocal;
+  private long s3DownloadEndTime;
+  private Path tempDir;
+  private Iterator<InputFile> inputFileIterator;
+  private List<CompletableFuture<Object>> completableFutureList;
   private T current = null;
   private TaskT currentTask = null;
+
+  private final AtomicBoolean isDownloaded = new AtomicBoolean(false);
 
   BaseReader(
       Table table,
@@ -115,6 +127,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
       Schema tableSchema,
       Schema expectedSchema,
       boolean caseSensitive) {
+    LOG.info("at base reader constructor");
     this.table = table;
     this.taskGroup = taskGroup;
     this.tasks = taskGroup.tasks().iterator();
@@ -126,6 +139,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     this.nameMapping =
         nameMappingString != null ? NameMappingParser.fromJson(nameMappingString) : null;
     this.counter = new DeleteCounter();
+    this.s3ToLocal = Maps.newConcurrentMap();
     executorService =
         MoreExecutors.getExitingExecutorService(
             (ThreadPoolExecutor)
@@ -135,9 +149,17 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
                         .setDaemon(true)
                         .setNameFormat("iceberg-base-reader-%d")
                         .build()));
-    this.iteratorFutures = prefetchInputFiles();
+    // this.iteratorFutures = prefetchInputFiles();
     try {
-      prefetchS3Files();
+      tempDir = Files.createTempDirectory("iceberg_files");
+      // TODO: you can check if the files have been downloaded already
+      completableFutureList = prefetchS3Files();
+
+      LOG.info("attempting to get downloaded s3 files....might block");
+      completableFutureList.stream().map(CompletableFuture::join).collect(Collectors.toList());
+      s3DownloadEndTime = System.currentTimeMillis();
+      LOG.info("total time to download s3 files: {}", s3DownloadEndTime - s3DownloadStartTime);
+
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
@@ -203,7 +225,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   }
 
   // TODO: not sure why i see current iterator null here
-  public boolean next() throws IOException {
+  public boolean oldNext() throws IOException {
     while (true) {
       if (currentIterator.hasNext()) {
         this.current = currentIterator.next();
@@ -226,10 +248,11 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     }
   }
 
-  public boolean oldNext() throws IOException {
+  public boolean next() throws IOException {
     try {
+      LOG.info("at next method");
+      Map<String, File> map = this.s3ToLocal;
       while (true) {
-        // current iterator is VectorizedParquetReader
         if (currentIterator.hasNext()) {
           this.current = currentIterator.next();
           return true;
@@ -268,33 +291,27 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
 
     this.currentIterator.close();
 
-    try {
-      iterators.forEach(
-          iterator -> {
-            try {
-              iterator.close();
-            } catch (IOException e) {
-              throw new RuntimeException(e);
-            }
-          });
-    } catch (Exception e) {
-      throw e;
-    }
+    //    try {
+    //      iterators.forEach(
+    //          iterator -> {
+    //            try {
+    //              iterator.close();
+    //            } catch (IOException e) {
+    //              throw new RuntimeException(e);
+    //            }
+    //          });
+    //    } catch (Exception e) {
+    //      throw e;
+    //    }
 
     long closeEndTime = System.currentTimeMillis();
     long duration = closeEndTime - constructorInitiationTime;
     LOG.info("total time taken in base reader: {}", duration);
-    // need to call close on every open call
 
     // exhaust the task iterator
-    //    while (tasks.hasNext()) {
-    //      tasks.next();
-    //    }
-  }
-
-  protected InputFile getInputFile(String location) {
-    LOG.info("getting input file for location: {}", location);
-    return inputFiles().get(location);
+    while (tasks.hasNext()) {
+      tasks.next();
+    }
   }
 
   private Map<String, InputFile> inputFiles() {
@@ -314,43 +331,59 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     return lazyInputFiles;
   }
 
-  private void prefetchS3Files() throws IOException {
-    LinkedBlockingQueue<InputFile> inputFiles =
-        taskGroup.tasks().stream()
-            .flatMap(this::referencedFiles)
-            .map(file -> table.io().newInputFile(file.path().toString()))
-            .collect(Collectors.toCollection(LinkedBlockingQueue::new));
+  private List<CompletableFuture<Object>> prefetchS3Files() throws IOException {
+    Preconditions.checkNotNull(inputFiles().values(), "input files should be non-null");
 
-    Path tempDir = Files.createTempDirectory("iceberg_files");
+    LOG.info("starting to download s3 files");
+    s3DownloadStartTime = System.currentTimeMillis();
 
-    CompletableFuture.supplyAsync(inputFiles::poll)
-        .thenApply(
-            inputFile -> {
-              SeekableInputStream inputStream = inputFile.newStream();
-              try {
-                byte[] targetArray = new byte[inputStream.available()];
-                inputStream.read(targetArray);
-                File parquetFile =
-                    new File(
-                        tempDir.toString(),
-                        FileFormat.PARQUET.addExtension(UUID.randomUUID().toString()));
-                FileOutputStream outputStream = new FileOutputStream(parquetFile.getName());
-                LOG.info("writing file to output file: {}", parquetFile);
-                outputStream.write(targetArray);
-                outputStream.close();
-                return null;
-              } catch (IOException e) {
-                throw new RuntimeException(e);
-              }
-            })
-        .handle(
-            (o, throwable) -> {
-              if (throwable != null) {
-                return throwable;
-              }
-              return null;
-            })
-        .join();
+    return inputFiles().values().stream()
+        .map(
+            inputFile ->
+                CompletableFuture.supplyAsync(
+                    () -> {
+                      downloadFile(inputFile);
+                      return null;
+                    }))
+        .collect(Collectors.toList());
+  }
+
+  private void downloadFile(InputFile inputFile) {
+    LOG.info("supply async for input file: {}", inputFile.location());
+    SeekableInputStream inputStream = inputFile.newStream();
+    try {
+      File parquetFile =
+          new File(
+              tempDir.toString(), FileFormat.PARQUET.addExtension(UUID.randomUUID().toString()));
+      FileOutputStream outputStream = new FileOutputStream(parquetFile.getAbsolutePath());
+      parquetFile.createNewFile();
+      LOG.info("writing file to output file: {}", parquetFile);
+
+      ByteStreams.copy(inputStream, outputStream);
+      // we need to keep a mapping of the s3 file location and the local file
+      // we open the referenced files for a given task. A task has reference to the s3
+      // files
+      // this map will help us reference the s3 file to a local file
+      this.s3ToLocal.put(inputFile.location(), parquetFile);
+      outputStream.close();
+      inputStream.close();
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  protected InputFile getInputFile(String location) {
+    if (!this.s3ToLocal.containsKey(location)) {
+      LOG.info("printing hashmap keys:{}", this.s3ToLocal.keySet());
+      throw new RuntimeException(String.format("s3 file doesnt exist :%s", location));
+    }
+    File localFile = this.s3ToLocal.get(location);
+    ResolvingFileIO fileIO = new ResolvingFileIO();
+    Map<String, String> properties = Maps.newHashMap();
+    fileIO.initialize(properties);
+    fileIO.setConf(new Configuration());
+    // fileIO.setConf(new HdfsConfiguration());
+    return fileIO.newInputFile(localFile.getAbsolutePath());
   }
 
   private Queue<CompletableFuture<CloseableIterator<T>>> prefetchInputFiles() {
