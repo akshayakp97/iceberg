@@ -63,6 +63,7 @@ import org.apache.iceberg.encryption.EncryptedInputFile;
 import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.io.InputFile;
 import org.apache.iceberg.io.OutputFile;
+import org.apache.iceberg.io.PositionOutputStream;
 import org.apache.iceberg.io.ResolvingFileIO;
 import org.apache.iceberg.io.SeekableInputStream;
 import org.apache.iceberg.mapping.NameMapping;
@@ -113,13 +114,14 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private LinkedBlockingQueue<CloseableIterator<T>> iterators = new LinkedBlockingQueue<>();
   private ExecutorService executorService;
   private long s3DownloadStartTime;
-  private Map<String, File> s3ToLocal;
+  private Map<String, String> s3ToLocal;
   private long s3DownloadEndTime;
   private Path tempDir;
   private Iterator<InputFile> inputFileIterator;
   private List<CompletableFuture<Object>> completableFutureList;
   private T current = null;
   private TaskT currentTask = null;
+  private ResolvingFileIO fileIO;
 
   private final AtomicBoolean isDownloaded = new AtomicBoolean(false);
 
@@ -158,6 +160,10 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
+    fileIO = new ResolvingFileIO();
+    Map<String, String> properties = Maps.newHashMap();
+    fileIO.initialize(properties);
+    fileIO.setConf(new Configuration());
     LOG.info("Reading table: {} using scan task group: {}", table.name(), taskGroup);
   }
 
@@ -347,10 +353,34 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
             inputFile ->
                 CompletableFuture.supplyAsync(
                     () -> {
-                      downloadFile(inputFile);
+                      downloadFileToHadoop(inputFile);
                       return null;
                     }))
         .collect(Collectors.toList());
+  }
+
+  private void downloadFileToHadoop(InputFile inputFile) {
+    LOG.info("supply async for input file: {}", inputFile.location());
+    SeekableInputStream inputStream = inputFile.newStream();
+    try {
+      String filename = getFileName(inputFile.location());
+      File parquetFile = new File(tempDir.toString(), FileFormat.PARQUET.addExtension(filename));
+      if (parquetFile.exists() && parquetFile.length() != 0) {
+        LOG.info(
+            "file: {} was already created, and length is non-empty, returning",
+            parquetFile.getPath());
+        inputStream.close();
+        return;
+      }
+      OutputFile outputFile = fileIO.newOutputFile(parquetFile.getPath());
+      PositionOutputStream os = outputFile.create();
+      ByteStreams.copy(inputStream, os);
+      this.s3ToLocal.put(inputFile.location(), outputFile.location());
+      inputStream.close();
+      os.close();
+    } catch (IOException | URISyntaxException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   private void downloadFile(InputFile inputFile) {
@@ -380,7 +410,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
       // we open the referenced files for a given task. A task has reference to the s3
       // files
       // this map will help us reference the s3 file to a local file
-      this.s3ToLocal.put(inputFile.location(), parquetFile);
+      // this.s3ToLocal.put(inputFile.location(), parquetFile);
       outputStream.close();
       inputStream.close();
       // TODO: open the file and read and check
@@ -410,47 +440,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
       LOG.info("printing hashmap keys:{}", this.s3ToLocal.keySet());
       throw new RuntimeException(String.format("s3 file doesnt exist :%s", location));
     }
-    File localFile = this.s3ToLocal.get(location);
-    ResolvingFileIO fileIO = new ResolvingFileIO();
-    Map<String, String> properties = Maps.newHashMap();
-    fileIO.initialize(properties);
-    fileIO.setConf(new Configuration());
-    return fileIO.newInputFile("file:/" + localFile.getPath());
-  }
-
-  private Queue<CompletableFuture<CloseableIterator<T>>> prefetchInputFiles() {
-    // in parallel, try to open the files for each task in task group
-    // i'm not sure if we want to open, just loading should be fine
-
-    // in parallel, call open() against each task and save all the iterables in a blocking queue or
-    // something
-    // and then also update the next() method to reference this queue instead of calling open again
-    //   CompletableFuture.supplyAsync(() -> {
-    //     Stream.of(this.tasks).
-    //   });
-    // you probably need to split the tasks iterator to be divided among threads
-    this.iteratorFutures = new LinkedBlockingQueue<>();
-    this.tasks.forEachRemaining(
-        task -> {
-          CompletableFuture<CloseableIterator<T>> iteratorFuture =
-              CompletableFuture.supplyAsync(() -> open(task), executorService)
-                  .whenComplete(
-                      (result, exception) -> {
-                        if (exception != null) {
-                          // Exception observed here will be thrown as part of
-                          // CompletionException when we join completable futures.
-                          if (!task.isDataTask()) {
-                            String filePaths =
-                                referencedFiles(task)
-                                    .map(file -> file.path().toString())
-                                    .collect(Collectors.joining(", "));
-                            LOG.error("Error reading file(s): {}", filePaths, exception);
-                          }
-                        }
-                      });
-          iteratorFutures.add(iteratorFuture);
-        });
-    return iteratorFutures;
+    return fileIO.newInputFile(this.s3ToLocal.get(location));
   }
 
   private EncryptedInputFile toEncryptedInputFile(ContentFile<?> file) {
