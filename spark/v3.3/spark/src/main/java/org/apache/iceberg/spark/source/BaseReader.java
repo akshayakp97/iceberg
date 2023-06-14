@@ -28,17 +28,11 @@ import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.avro.generic.GenericData;
@@ -72,8 +66,6 @@ import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.relocated.com.google.common.io.ByteStreams;
-import org.apache.iceberg.relocated.com.google.common.util.concurrent.MoreExecutors;
-import org.apache.iceberg.relocated.com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.iceberg.spark.SparkSchemaUtil;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types.NestedField;
@@ -104,26 +96,17 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private final ScanTaskGroup<TaskT> taskGroup;
   private final Iterator<TaskT> tasks;
   private final DeleteCounter counter;
-
   private Map<String, InputFile> lazyInputFiles;
   private CloseableIterator<T> currentIterator;
-  private long nextMethodStartTime;
   private final long constructorInitiationTime;
-  private Queue<CompletableFuture<CloseableIterator<T>>> iteratorFutures;
-  // TODO: should this be a thread safe data structure?
-  private LinkedBlockingQueue<CloseableIterator<T>> iterators = new LinkedBlockingQueue<>();
-  private ExecutorService executorService;
   private long s3DownloadStartTime;
   private Map<String, String> s3ToLocal;
   private long s3DownloadEndTime;
   private Path tempDir;
-  private Iterator<InputFile> inputFileIterator;
   private List<CompletableFuture<Object>> completableFutureList;
   private T current = null;
   private TaskT currentTask = null;
   private ResolvingFileIO fileIO;
-
-  private final AtomicBoolean isDownloaded = new AtomicBoolean(false);
 
   BaseReader(
       Table table,
@@ -144,16 +127,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
         nameMappingString != null ? NameMappingParser.fromJson(nameMappingString) : null;
     this.counter = new DeleteCounter();
     this.s3ToLocal = Maps.newConcurrentMap();
-    executorService =
-        MoreExecutors.getExitingExecutorService(
-            (ThreadPoolExecutor)
-                Executors.newFixedThreadPool(
-                    Runtime.getRuntime().availableProcessors(),
-                    new ThreadFactoryBuilder()
-                        .setDaemon(true)
-                        .setNameFormat("iceberg-base-reader-%d")
-                        .build()));
-    // this.iteratorFutures = prefetchInputFiles();
+
     constructorInitiationTime = System.currentTimeMillis();
     try {
       tempDir = Files.createTempDirectory(table.name());
@@ -189,63 +163,6 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
 
   protected DeleteCounter counter() {
     return counter;
-  }
-
-  // TODO: this might cause memory to explode
-  private void iterateTasks() {
-    // maybe adding pub sub will make it better
-    Preconditions.checkState(iteratorFutures != null);
-    if (iteratorFutures.peek() == null) {
-      return;
-    }
-    //    iterators = iteratorFutures
-    //        .parallelStream()
-    //        .map(
-    //            (iteratorFuture) -> {
-    //              try {
-    //                return iteratorFuture.join();
-    //              } catch (CompletionException e) {
-    //                LOG.error("exception encountered while attempting to join future: {}", e);
-    //                throw e;
-    //              }
-    //            })
-    //            .collect(Collectors.toCollection(LinkedBlockingQueue::new));
-    CompletableFuture.supplyAsync(() -> iteratorFutures.poll())
-        .thenApply(
-            (iteratorFuture) -> {
-              try {
-                return iteratorFuture.join();
-              } catch (CompletionException e) {
-                LOG.error("exception encountered while attempting to join future: {}", e);
-                throw e;
-              }
-            })
-        .thenApply((iterator) -> iterators.add(iterator))
-        .join();
-  }
-
-  // TODO: not sure why i see current iterator null here
-  public boolean oldNext() throws IOException {
-    while (true) {
-      if (currentIterator.hasNext()) {
-        this.current = currentIterator.next();
-        return true;
-      } else if (iterators.peek() != null) {
-        currentIterator.close();
-        currentIterator = iterators.poll();
-      } else if (iterators.peek() == null && iteratorFutures.peek() == null) {
-        currentIterator.close();
-        LOG.info("finished iterating over all iterators");
-        long nextMethodEndTime = System.currentTimeMillis();
-        long duration = nextMethodEndTime - nextMethodStartTime;
-        LOG.info("total time taken for next method: {} ms", duration);
-        return false;
-      } else {
-        nextMethodStartTime = System.currentTimeMillis();
-        LOG.info("iterating over files");
-        iterateTasks();
-      }
-    }
   }
 
   public boolean next() throws IOException {
@@ -297,23 +214,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     LOG.info("closing reader");
     InputFileBlockHolder.unset();
 
-    // close the current iterator
-    // might have to iterate over all opened tasks and close it
-
     this.currentIterator.close();
-
-    //    try {
-    //      iterators.forEach(
-    //          iterator -> {
-    //            try {
-    //              iterator.close();
-    //            } catch (IOException e) {
-    //              throw new RuntimeException(e);
-    //            }
-    //          });
-    //    } catch (Exception e) {
-    //      throw e;
-    //    }
 
     long closeEndTime = System.currentTimeMillis();
     long duration = closeEndTime - constructorInitiationTime;
@@ -364,16 +265,15 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     SeekableInputStream inputStream = inputFile.newStream();
     try {
       String filename = getFileName(inputFile.location());
-      File parquetFile = new File(tempDir.toString(), FileFormat.PARQUET.addExtension(filename));
-      if (parquetFile.exists() && parquetFile.length() != 0) {
-        LOG.info(
-            "file: {} was already created, and length is non-empty, returning",
-            parquetFile.getPath());
+      Path path = Paths.get(tempDir.toString() + FileFormat.PARQUET.addExtension(filename));
+      if (fileIO.newInputFile(path.toString()).exists()
+          && fileIO.newInputFile(path.toString()).getLength() > 0) {
+        LOG.info("file: {} was already created, and length is non-empty, returning", path);
         inputStream.close();
         return;
       }
-      OutputFile outputFile = fileIO.newOutputFile(parquetFile.getPath());
-      PositionOutputStream os = outputFile.create();
+      OutputFile outputFile = fileIO.newOutputFile(path.toString());
+      PositionOutputStream os = outputFile.createOrOverwrite();
       ByteStreams.copy(inputStream, os);
       this.s3ToLocal.put(inputFile.location(), outputFile.location());
       inputStream.close();
