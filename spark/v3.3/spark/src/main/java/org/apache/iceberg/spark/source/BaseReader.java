@@ -98,6 +98,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private CloseableIterator<T> currentIterator;
   private final long constructorInitiationTime;
   private long s3DownloadStartTime;
+  private long nextMethodStartTime;
   private Map<String, String> s3ToLocal;
   private long s3DownloadEndTime;
   private Path tempDir;
@@ -165,9 +166,9 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
 
   public boolean next() throws IOException {
     try {
+      nextMethodStartTime = System.currentTimeMillis();
       LOG.info("at next method");
       try {
-        // TODO: you can check if the files have been downloaded already
         completableFutureList = prefetchS3Files();
         LOG.info("attempting to get downloaded s3 files....might block");
         completableFutureList.stream().map(CompletableFuture::join).collect(Collectors.toList());
@@ -180,6 +181,9 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
       while (true) {
         if (currentIterator.hasNext()) {
           this.current = currentIterator.next();
+          long nextMethodEndTime = System.currentTimeMillis();
+          LOG.info(
+              "total time taken in next method: {} ms", nextMethodEndTime - nextMethodStartTime);
           return true;
         } else if (tasks.hasNext()) {
           this.currentIterator.close();
@@ -264,12 +268,14 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     try {
       String filename = getFileName(inputFile.location());
       Path path = Paths.get(tempDir.toString() + FileFormat.PARQUET.addExtension(filename));
+      LOG.info("checking if file already exists at path: {}", path.toString());
       if (fileIO.newInputFile(path.toString()).exists()
           && fileIO.newInputFile(path.toString()).getLength() > 0) {
         LOG.info("file: {} was already created, and length is non-empty, returning", path);
         inputStream.close();
         return;
       }
+      LOG.info("file does not exist, creating new one at: {}", path.toString());
       OutputFile outputFile = fileIO.newOutputFile(path.toString());
       PositionOutputStream os = outputFile.createOrOverwrite();
       ByteStreams.copy(inputStream, os);
