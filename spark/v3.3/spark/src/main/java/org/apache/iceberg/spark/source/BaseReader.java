@@ -24,6 +24,7 @@ import java.math.BigDecimal;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -100,7 +101,6 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private long nextMethodStartTime;
   private Map<String, String> s3ToLocal;
   private long s3DownloadEndTime;
-  private Path tempDir;
   private List<CompletableFuture<Object>> completableFutureList;
   private T current = null;
   private TaskT currentTask = null;
@@ -127,11 +127,6 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     this.s3ToLocal = Maps.newConcurrentMap();
 
     constructorInitiationTime = System.currentTimeMillis();
-    try {
-      tempDir = Files.createTempDirectory(table.name());
-    } catch (IOException e) {
-      throw new RuntimeException(e);
-    }
     fileIO = new ResolvingFileIO();
     Map<String, String> properties = Maps.newHashMap();
     fileIO.initialize(properties);
@@ -266,11 +261,18 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     SeekableInputStream inputStream = inputFile.newStream();
     try {
       String filename = getFileName(inputFile.location());
-      Path path = Paths.get(tempDir.toString() + FileFormat.PARQUET.addExtension(filename));
+      Path tempDir = Paths.get(System.getProperty("java.io.tmpdir"), table.name());
+      try {
+        Files.createDirectory(tempDir);
+      } catch (FileAlreadyExistsException e) {
+        LOG.info("temp directory already created locally");
+      }
+      Path path = Paths.get(tempDir.toString(), FileFormat.PARQUET.addExtension(filename));
       LOG.info("checking if file already exists at path: {}", path.toString());
       if (fileIO.newInputFile(path.toString()).exists()
           && fileIO.newInputFile(path.toString()).getLength() > 0) {
         LOG.info("file: {} was already created, and length is non-empty, returning", path);
+        this.s3ToLocal.put(inputFile.location(), path.toString());
         inputStream.close();
         return;
       }
@@ -294,6 +296,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     if (idx >= 0) {
       filename = path.substring(idx + 1, path.length());
     }
+    LOG.info("filename: {} for file location: {}", filename, fileLocation);
     return filename;
   }
 
