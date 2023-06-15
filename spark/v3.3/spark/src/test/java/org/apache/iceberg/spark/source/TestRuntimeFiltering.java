@@ -302,6 +302,11 @@ public class TestRuntimeFiltering extends SparkTestBaseWithCatalog {
         "Should have expected rows",
         sql("SELECT * FROM %s WHERE id = 1 ORDER BY date", tableName),
         sql(query));
+
+    assertEquals(
+        "Should have expected rows",
+        sql("SELECT * FROM %s WHERE id = 1 ORDER BY date", tableName),
+        sql(query));
   }
 
   @Test

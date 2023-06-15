@@ -85,7 +85,6 @@ import org.slf4j.LoggerFactory;
  */
 abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private static final Logger LOG = LoggerFactory.getLogger(BaseReader.class);
-
   private final Table table;
   private final Schema tableSchema;
   private final Schema expectedSchema;
