@@ -61,8 +61,6 @@ import org.apache.iceberg.io.ResolvingFileIO;
 import org.apache.iceberg.io.SeekableInputStream;
 import org.apache.iceberg.mapping.NameMapping;
 import org.apache.iceberg.mapping.NameMappingParser;
-import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
-import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.relocated.com.google.common.io.ByteStreams;
 import org.apache.iceberg.spark.SparkSchemaUtil;
@@ -93,6 +91,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private final NameMapping nameMapping;
   private final ScanTaskGroup<TaskT> taskGroup;
   private final Iterator<TaskT> tasks;
+  private final Iterator<TaskT> tasksCopy;
   private final DeleteCounter counter;
   private Map<String, InputFile> lazyInputFiles;
   private CloseableIterator<T> currentIterator;
@@ -101,7 +100,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private long nextMethodStartTime;
   private Map<String, String> s3ToLocal;
   private long s3DownloadEndTime;
-  private List<CompletableFuture<Object>> completableFutureList;
+  private List<CompletableFuture<Object>> prefetchedS3FileFutures;
   private T current = null;
   private TaskT currentTask = null;
   private ResolvingFileIO fileIO;
@@ -116,6 +115,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     this.table = table;
     this.taskGroup = taskGroup;
     this.tasks = taskGroup.tasks().iterator();
+    this.tasksCopy = this.tasks;
     this.currentIterator = CloseableIterator.empty();
     this.tableSchema = tableSchema;
     this.expectedSchema = expectedSchema;
@@ -131,6 +131,13 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     Map<String, String> properties = Maps.newHashMap();
     fileIO.initialize(properties);
     fileIO.setConf(new Configuration());
+    if (tasksCopy.hasNext()) {
+      try {
+        prefetchedS3FileFutures = prefetchS3FileForTask(tasks.next());
+      } catch (IOException e) {
+        throw new RuntimeException(e);
+      }
+    }
     LOG.info("Reading table: {} using scan task group: {}", table.name(), taskGroup);
   }
 
@@ -162,17 +169,15 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     try {
       nextMethodStartTime = System.currentTimeMillis();
       LOG.info("at next method");
-      try {
-        completableFutureList = prefetchS3Files();
+      while (true) {
+        // TODO: have to check if we got a CompletableException here
         LOG.info("attempting to get downloaded s3 files....might block");
-        completableFutureList.stream().map(CompletableFuture::join).collect(Collectors.toList());
+        prefetchedS3FileFutures.stream().map(CompletableFuture::join).collect(Collectors.toList());
         s3DownloadEndTime = System.currentTimeMillis();
         LOG.info("total time to download s3 files: {}", s3DownloadEndTime - s3DownloadStartTime);
-
-      } catch (IOException e) {
-        throw new RuntimeException(e);
-      }
-      while (true) {
+        if (tasksCopy.hasNext()) {
+          prefetchedS3FileFutures = prefetchS3FileForTask(tasksCopy.next());
+        }
         if (currentIterator.hasNext()) {
           this.current = currentIterator.next();
           long nextMethodEndTime = System.currentTimeMillis();
@@ -182,6 +187,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
         } else if (tasks.hasNext()) {
           this.currentIterator.close();
           this.currentTask = tasks.next();
+          // s3 file for this task should have been downloaded, as we do a join in L188
           this.currentIterator = open(currentTask);
         } else {
           this.currentIterator.close();
@@ -222,30 +228,12 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     }
   }
 
-  private Map<String, InputFile> inputFiles() {
-    if (lazyInputFiles == null) {
-      Stream<EncryptedInputFile> encryptedFiles =
-          taskGroup.tasks().stream().flatMap(this::referencedFiles).map(this::toEncryptedInputFile);
-
-      // decrypt with the batch call to avoid multiple RPCs to a key server, if possible
-      Iterable<InputFile> decryptedFiles = table.encryption().decrypt(encryptedFiles::iterator);
-
-      Map<String, InputFile> files = Maps.newHashMapWithExpectedSize(taskGroup.tasks().size());
-      decryptedFiles.forEach(decrypted -> files.putIfAbsent(decrypted.location(), decrypted));
-      LOG.info("assigning input files: {}", files);
-      this.lazyInputFiles = ImmutableMap.copyOf(files);
-    }
-
-    return lazyInputFiles;
-  }
-
-  private List<CompletableFuture<Object>> prefetchS3Files() throws IOException {
-    Preconditions.checkNotNull(inputFiles().values(), "input files should be non-null");
-
-    LOG.info("starting to download s3 files");
+  private List<CompletableFuture<Object>> prefetchS3FileForTask(TaskT task) throws IOException {
+    LOG.info("prefetching s3 file, starting to download s3 files");
     s3DownloadStartTime = System.currentTimeMillis();
-
-    return inputFiles().values().stream()
+    return referencedFiles(task)
+        .map(this::toEncryptedInputFile)
+        .map(file -> table.encryption().decrypt(file))
         .map(
             inputFile ->
                 CompletableFuture.supplyAsync(
@@ -279,7 +267,9 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
       LOG.info("file does not exist, creating new one at: {}", path.toString());
       OutputFile outputFile = fileIO.newOutputFile(path.toString());
       PositionOutputStream os = outputFile.createOrOverwrite();
+      long s3WriteToDiskStartTime = System.currentTimeMillis();
       ByteStreams.copy(inputStream, os);
+      LOG.info("total time to write s3 file to local disk: {}", System.currentTimeMillis() - s3WriteToDiskStartTime);
       this.s3ToLocal.put(inputFile.location(), outputFile.location());
       inputStream.close();
       os.close();
