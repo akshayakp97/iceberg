@@ -269,7 +269,9 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
       PositionOutputStream os = outputFile.createOrOverwrite();
       long s3WriteToDiskStartTime = System.currentTimeMillis();
       ByteStreams.copy(inputStream, os);
-      LOG.info("total time to write s3 file to local disk: {}", System.currentTimeMillis() - s3WriteToDiskStartTime);
+      LOG.info(
+          "total time to write s3 file to local disk: {}",
+          System.currentTimeMillis() - s3WriteToDiskStartTime);
       this.s3ToLocal.put(inputFile.location(), outputFile.location());
       inputStream.close();
       os.close();
