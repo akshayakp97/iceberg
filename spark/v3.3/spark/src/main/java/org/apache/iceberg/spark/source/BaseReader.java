@@ -28,6 +28,7 @@ import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -61,6 +62,7 @@ import org.apache.iceberg.io.ResolvingFileIO;
 import org.apache.iceberg.io.SeekableInputStream;
 import org.apache.iceberg.mapping.NameMapping;
 import org.apache.iceberg.mapping.NameMappingParser;
+import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.relocated.com.google.common.io.ByteStreams;
 import org.apache.iceberg.spark.SparkSchemaUtil;
@@ -104,6 +106,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private T current = null;
   private TaskT currentTask = null;
   private ResolvingFileIO fileIO;
+  private final Collection<TaskT> tasksCache = Lists.newArrayList();
 
   BaseReader(
       Table table,
@@ -114,8 +117,10 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     LOG.info("at base reader constructor");
     this.table = table;
     this.taskGroup = taskGroup;
-    this.tasks = taskGroup.tasks().iterator();
-    this.tasksCopy = this.tasks;
+    this.tasksCache.addAll(taskGroup.tasks());
+    LOG.info("tasks list size : {}", tasksCache.size());
+    this.tasks = tasksCache.iterator();
+    this.tasksCopy = tasksCache.iterator();
     this.currentIterator = CloseableIterator.empty();
     this.tableSchema = tableSchema;
     this.expectedSchema = expectedSchema;
@@ -133,7 +138,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     fileIO.setConf(new Configuration());
     if (tasksCopy.hasNext()) {
       try {
-        prefetchedS3FileFutures = prefetchS3FileForTask(tasks.next());
+        prefetchedS3FileFutures = prefetchS3FileForTask(tasksCopy.next());
       } catch (IOException e) {
         throw new RuntimeException(e);
       }
@@ -176,9 +181,13 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
         s3DownloadEndTime = System.currentTimeMillis();
         LOG.info("total time to download s3 files: {}", s3DownloadEndTime - s3DownloadStartTime);
         if (tasksCopy.hasNext()) {
+          LOG.info("next task available, prefetching data");
           prefetchedS3FileFutures = prefetchS3FileForTask(tasksCopy.next());
+        } else {
+          LOG.info("no more tasks");
         }
         if (currentIterator.hasNext()) {
+          LOG.info("iterating over current iterator");
           this.current = currentIterator.next();
           long nextMethodEndTime = System.currentTimeMillis();
           LOG.info(
