@@ -176,16 +176,6 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
       LOG.info("at next method");
       while (true) {
         // TODO: have to check if we got a CompletableException here
-        LOG.info("attempting to get downloaded s3 files....might block");
-        prefetchedS3FileFutures.stream().map(CompletableFuture::join).collect(Collectors.toList());
-        s3DownloadEndTime = System.currentTimeMillis();
-        LOG.info("total time to download s3 files: {}", s3DownloadEndTime - s3DownloadStartTime);
-        if (tasksCopy.hasNext()) {
-          LOG.info("next task available, prefetching data");
-          prefetchedS3FileFutures = prefetchS3FileForTask(tasksCopy.next());
-        } else {
-          LOG.info("no more tasks");
-        }
         if (currentIterator.hasNext()) {
           LOG.info("iterating over current iterator");
           this.current = currentIterator.next();
@@ -194,6 +184,18 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
               "total time taken in next method: {} ms", nextMethodEndTime - nextMethodStartTime);
           return true;
         } else if (tasks.hasNext()) {
+          LOG.info("attempting to get downloaded s3 files....might block");
+          prefetchedS3FileFutures.stream()
+              .map(CompletableFuture::join)
+              .collect(Collectors.toList());
+          s3DownloadEndTime = System.currentTimeMillis();
+          LOG.info("total time to download s3 files: {}", s3DownloadEndTime - s3DownloadStartTime);
+          if (tasksCopy.hasNext()) {
+            LOG.info("next task available in tasksCopy, kick off prefetch data");
+            prefetchedS3FileFutures = prefetchS3FileForTask(tasksCopy.next());
+          } else {
+            LOG.info("no more tasks in tasksCopy");
+          }
           this.currentIterator.close();
           this.currentTask = tasks.next();
           // s3 file for this task should have been downloaded, as we do a join in L188
