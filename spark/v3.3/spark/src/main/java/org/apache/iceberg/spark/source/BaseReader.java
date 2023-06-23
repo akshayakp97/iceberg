@@ -29,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Collection;
+import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -173,25 +174,26 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   public boolean next() throws IOException {
     try {
       nextMethodStartTime = System.currentTimeMillis();
-      LOG.info("at next method");
+      //LOG.info("at next method");
       while (true) {
         // TODO: have to check if we got a CompletableException here
         if (currentIterator.hasNext()) {
-          LOG.info("iterating over current iterator");
+          //LOG.info("iterating over current iterator");
           this.current = currentIterator.next();
           long nextMethodEndTime = System.currentTimeMillis();
-          LOG.info(
-              "total time taken in next method: {} ms", nextMethodEndTime - nextMethodStartTime);
+//          LOG.info(
+//              "total time taken in next method: {} ms", nextMethodEndTime - nextMethodStartTime);
           return true;
         } else if (tasks.hasNext()) {
-          LOG.info("attempting to get downloaded s3 files....might block");
+          LOG.info("attempting to get downloaded s3 files....might block at time: {}", new Date());
           prefetchedS3FileFutures.stream()
               .map(CompletableFuture::join)
               .collect(Collectors.toList());
           s3DownloadEndTime = System.currentTimeMillis();
+          LOG.info("was able to get prefetched data at: {}", new Date());
           LOG.info("total time to download s3 files: {}", s3DownloadEndTime - s3DownloadStartTime);
           if (tasksCopy.hasNext()) {
-            LOG.info("next task available in tasksCopy, kick off prefetch data");
+            LOG.info("next task available in tasksCopy, kick off prefetch data: {}", new Date());
             prefetchedS3FileFutures = prefetchS3FileForTask(tasksCopy.next());
           } else {
             LOG.info("no more tasks in tasksCopy");
@@ -240,7 +242,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   }
 
   private List<CompletableFuture<Object>> prefetchS3FileForTask(TaskT task) throws IOException {
-    LOG.info("prefetching s3 file, starting to download s3 files");
+    LOG.info("prefetching s3 file, starting to download s3 files at time: {}", new Date());
     s3DownloadStartTime = System.currentTimeMillis();
     return referencedFiles(task)
         .map(this::toEncryptedInputFile)
