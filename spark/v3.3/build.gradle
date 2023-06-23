@@ -22,9 +22,9 @@ String sparkMajorVersion = '3.3'
 String scalaVersion = System.getProperty("scalaVersion") != null ? System.getProperty("scalaVersion") : System.getProperty("defaultScalaVersion")
 
 def sparkProjects = [
-    project(":iceberg-spark:iceberg-spark-${sparkMajorVersion}_${scalaVersion}"),
-    project(":iceberg-spark:iceberg-spark-extensions-${sparkMajorVersion}_${scalaVersion}"),
-    project(":iceberg-spark:iceberg-spark-runtime-${sparkMajorVersion}_${scalaVersion}"),
+        project(":iceberg-spark:iceberg-spark-${sparkMajorVersion}_${scalaVersion}"),
+        project(":iceberg-spark:iceberg-spark-extensions-${sparkMajorVersion}_${scalaVersion}"),
+        project(":iceberg-spark:iceberg-spark-runtime-${sparkMajorVersion}_${scalaVersion}"),
 ]
 
 configure(sparkProjects) {
@@ -53,6 +53,16 @@ project(":iceberg-spark:iceberg-spark-${sparkMajorVersion}_${scalaVersion}") {
   dependencies {
     implementation project(path: ':iceberg-bundled-guava', configuration: 'shadow')
     api project(':iceberg-api')
+    implementation 'software.amazon.awssdk:url-connection-client'
+    implementation 'software.amazon.awssdk:apache-client'
+    implementation 'software.amazon.awssdk:auth'
+    implementation 'software.amazon.awssdk:s3'
+    implementation 'software.amazon.awssdk:kms'
+    implementation 'software.amazon.awssdk:glue'
+    implementation 'software.amazon.awssdk:sts'
+    implementation 'software.amazon.awssdk:dynamodb'
+    implementation 'software.amazon.awssdk:lakeformation'
+    implementation project(':iceberg-aws')
     implementation project(':iceberg-common')
     implementation project(':iceberg-core')
     implementation project(':iceberg-data')
@@ -204,6 +214,16 @@ project(":iceberg-spark:iceberg-spark-runtime-${sparkMajorVersion}_${scalaVersio
 
   dependencies {
     api project(':iceberg-api')
+    implementation 'software.amazon.awssdk:url-connection-client'
+    implementation 'software.amazon.awssdk:apache-client'
+    implementation 'software.amazon.awssdk:auth'
+    implementation 'software.amazon.awssdk:s3'
+    implementation 'software.amazon.awssdk:kms'
+    implementation 'software.amazon.awssdk:glue'
+    implementation 'software.amazon.awssdk:sts'
+    implementation 'software.amazon.awssdk:dynamodb'
+    implementation 'software.amazon.awssdk:lakeformation'
+    implementation project(':iceberg-aws')
     implementation project(":iceberg-spark:iceberg-spark-${sparkMajorVersion}_${scalaVersion}")
     implementation project(":iceberg-spark:iceberg-spark-extensions-${sparkMajorVersion}_${scalaVersion}")
     implementation project(':iceberg-aws')
@@ -282,4 +302,3 @@ project(":iceberg-spark:iceberg-spark-runtime-${sparkMajorVersion}_${scalaVersio
     enabled = false
   }
 }
-
