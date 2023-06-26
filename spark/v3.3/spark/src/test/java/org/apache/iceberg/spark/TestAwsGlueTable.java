@@ -18,32 +18,15 @@
  */
 package org.apache.iceberg.spark;
 
-import java.util.Map;
-import org.apache.iceberg.CombinedScanTask;
-import org.apache.iceberg.Table;
-import org.apache.iceberg.TableScan;
-import org.apache.iceberg.aws.AwsClientFactories;
-import org.apache.iceberg.aws.AwsClientFactory;
-import org.apache.iceberg.aws.AwsProperties;
-import org.apache.iceberg.aws.glue.GlueCatalog;
-import org.apache.iceberg.aws.s3.S3FileIO;
-import org.apache.iceberg.catalog.TableIdentifier;
-import org.apache.iceberg.expressions.Expressions;
-import org.apache.iceberg.io.CloseableIterable;
+import org.apache.spark.sql.DataFrameWriter;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
-import org.apache.spark.sql.catalog.Catalog;
-import org.apache.spark.sql.catalyst.analysis.NoSuchTableException;
-import org.apache.spark.sql.internal.SQLConf;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import software.amazon.awssdk.services.glue.GlueClient;
 
-import static org.apache.hadoop.hive.conf.HiveConf.ConfVars.METASTOREURIS;
 import static org.apache.spark.sql.functions.date_add;
-import static org.apache.spark.sql.functions.expr;
 
 public class TestAwsGlueTable {
     Logger LOG = LoggerFactory.getLogger(TestAwsGlueTable.class);
@@ -81,7 +64,9 @@ public class TestAwsGlueTable {
                 .config("spark.sql.catalog.spark_catalog.catalog-impl", "org.apache.iceberg.aws.glue.GlueCatalog")
                 .config("spark.sql.defaultUrlStreamHandlerFactory.enabled", "false")
                 .getOrCreate();
-        spark.sql("select * from tpcds_3000_iceberg_parq.iceberg_parquet_large_file_size_small_row_group").show(1179898);
+        Dataset<Row> df = spark.sql("select * from tpcds_3000_iceberg_parq.iceberg_parquet_large_file_size_small_row_group");
+        DataFrameWriter<Row> dataFrameWriter = df.write();
+        dataFrameWriter.csv("/var/folders/_h/ps0_3wwx3p96z27n9md14d7s_2v418/T/spark_iceberg_data_prefetch/output_files/output2.csv");
     }
 
 }

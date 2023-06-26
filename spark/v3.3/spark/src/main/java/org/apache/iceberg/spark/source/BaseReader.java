@@ -63,6 +63,7 @@ import org.apache.iceberg.io.ResolvingFileIO;
 import org.apache.iceberg.io.SeekableInputStream;
 import org.apache.iceberg.mapping.NameMapping;
 import org.apache.iceberg.mapping.NameMappingParser;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.relocated.com.google.common.io.ByteStreams;
@@ -106,6 +107,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private List<CompletableFuture<Object>> prefetchedS3FileFutures;
   private T current = null;
   private TaskT currentTask = null;
+  private int count = 0;
   private ResolvingFileIO fileIO;
   private final Collection<TaskT> tasksCache = Lists.newArrayList();
 
@@ -137,12 +139,18 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     Map<String, String> properties = Maps.newHashMap();
     fileIO.initialize(properties);
     fileIO.setConf(new Configuration());
-    if (tasksCopy.hasNext()) {
-      try {
-        prefetchedS3FileFutures = prefetchS3FileForTask(tasksCopy.next());
-      } catch (IOException e) {
-        throw new RuntimeException(e);
+    int c = 0;
+    while(tasksCopy.hasNext()) {
+      if (c == 1) {
+        try {
+          prefetchedS3FileFutures = prefetchS3FileForTask(tasksCopy.next());
+          break;
+        } catch (IOException e) {
+          throw new RuntimeException(e);
+        }
       }
+      c += 1;
+      tasksCopy.next();
     }
     LOG.info("Reading table: {} using scan task group: {}", table.name(), taskGroup);
   }
@@ -185,23 +193,28 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
 //              "total time taken in next method: {} ms", nextMethodEndTime - nextMethodStartTime);
           return true;
         } else if (tasks.hasNext()) {
-          LOG.info("attempting to get downloaded s3 files....might block at time: {}", new Date());
-          prefetchedS3FileFutures.stream()
-              .map(CompletableFuture::join)
-              .collect(Collectors.toList());
-          s3DownloadEndTime = System.currentTimeMillis();
-          LOG.info("was able to get prefetched data at: {}", new Date());
-          LOG.info("total time to download s3 files: {}", s3DownloadEndTime - s3DownloadStartTime);
-          if (tasksCopy.hasNext()) {
-            LOG.info("next task available in tasksCopy, kick off prefetch data: {}", new Date());
-            prefetchedS3FileFutures = prefetchS3FileForTask(tasksCopy.next());
+          if (count>=1) {
+            LOG.info("attempting to get downloaded s3 files....might block at time: {}", new Date());
+            prefetchedS3FileFutures.stream()
+                    .map(CompletableFuture::join)
+                    .collect(Collectors.toList());
+            s3DownloadEndTime = System.currentTimeMillis();
+            LOG.info("was able to get prefetched data at: {}", new Date());
+            LOG.info("total time to download s3 files: {}", s3DownloadEndTime - s3DownloadStartTime);
+            if (tasksCopy.hasNext()) {
+              LOG.info("next task available in tasksCopy, kick off prefetch data: {}", new Date());
+              prefetchedS3FileFutures = prefetchS3FileForTask(tasksCopy.next());
+            } else {
+              LOG.info("no more tasks in tasksCopy");
+            }
           } else {
-            LOG.info("no more tasks in tasksCopy");
+            LOG.info("opening data for first task");
           }
           this.currentIterator.close();
           this.currentTask = tasks.next();
           // s3 file for this task should have been downloaded, as we do a join in L188
           this.currentIterator = open(currentTask);
+          count += 1;
         } else {
           this.currentIterator.close();
           return false;
@@ -306,11 +319,30 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   }
 
   protected InputFile getInputFile(String location) {
+    if (count == 0) {
+      return inputFiles().get(location);
+    }
     if (!this.s3ToLocal.containsKey(location)) {
       LOG.info("printing hashmap keys:{}", this.s3ToLocal.keySet());
       throw new RuntimeException(String.format("s3 file doesnt exist :%s", location));
     }
     return fileIO.newInputFile(this.s3ToLocal.get(location));
+  }
+
+  private Map<String, InputFile> inputFiles() {
+    if (lazyInputFiles == null) {
+      Stream<EncryptedInputFile> encryptedFiles =
+              taskGroup.tasks().stream().flatMap(this::referencedFiles).map(this::toEncryptedInputFile);
+
+      // decrypt with the batch call to avoid multiple RPCs to a key server, if possible
+      Iterable<InputFile> decryptedFiles = table.encryption().decrypt(encryptedFiles::iterator);
+
+      Map<String, InputFile> files = Maps.newHashMapWithExpectedSize(taskGroup.tasks().size());
+      decryptedFiles.forEach(decrypted -> files.putIfAbsent(decrypted.location(), decrypted));
+      this.lazyInputFiles = ImmutableMap.copyOf(files);
+    }
+
+    return lazyInputFiles;
   }
 
   private EncryptedInputFile toEncryptedInputFile(ContentFile<?> file) {
