@@ -132,7 +132,7 @@ public class TableScanUtil {
         CloseableIterable.combine(
             new BinPacking.PackingIterable<>(splitTasks, splitSize, lookback, weightFunc, true),
             splitTasks),
-            BaseScanTaskGroup::new);
+        BaseScanTaskGroup::new);
   }
 
   @SuppressWarnings("unchecked")

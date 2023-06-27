@@ -30,9 +30,11 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Collection;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -63,6 +65,7 @@ import org.apache.iceberg.io.ResolvingFileIO;
 import org.apache.iceberg.io.SeekableInputStream;
 import org.apache.iceberg.mapping.NameMapping;
 import org.apache.iceberg.mapping.NameMappingParser;
+import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
@@ -95,16 +98,15 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private final NameMapping nameMapping;
   private final ScanTaskGroup<TaskT> taskGroup;
   private final Iterator<TaskT> tasks;
-  private final Iterator<TaskT> tasksCopy;
   private final DeleteCounter counter;
   private Map<String, InputFile> lazyInputFiles;
   private CloseableIterator<T> currentIterator;
   private final long constructorInitiationTime;
+  private long allS3FilesDownloadStartTime;
   private long s3DownloadStartTime;
   private long nextMethodStartTime;
   private Map<String, String> s3ToLocal;
   private long s3DownloadEndTime;
-  private List<CompletableFuture<Object>> prefetchedS3FileFutures;
   private T current = null;
   private TaskT currentTask = null;
   private int count = 0;
@@ -123,7 +125,6 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     this.tasksCache.addAll(taskGroup.tasks());
     LOG.info("tasks list size : {}", tasksCache.size());
     this.tasks = tasksCache.iterator();
-    this.tasksCopy = tasksCache.iterator();
     this.currentIterator = CloseableIterator.empty();
     this.tableSchema = tableSchema;
     this.expectedSchema = expectedSchema;
@@ -139,18 +140,11 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     Map<String, String> properties = Maps.newHashMap();
     fileIO.initialize(properties);
     fileIO.setConf(new Configuration());
-    int c = 0;
-    while(tasksCopy.hasNext()) {
-      if (c == 1) {
-        try {
-          prefetchedS3FileFutures = prefetchS3FileForTask(tasksCopy.next());
-          break;
-        } catch (IOException e) {
-          throw new RuntimeException(e);
-        }
-      }
-      c += 1;
-      tasksCopy.next();
+    try {
+      LOG.info("attempting to download all files for the task group at: {}", new Date());
+      prefetchS3Files();
+    } catch (IOException e) {
+      throw new RuntimeException(e);
     }
     LOG.info("Reading table: {} using scan task group: {}", table.name(), taskGroup);
   }
@@ -182,37 +176,30 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   public boolean next() throws IOException {
     try {
       nextMethodStartTime = System.currentTimeMillis();
-      //LOG.info("at next method");
+      // LOG.info("at next method");
       while (true) {
         // TODO: have to check if we got a CompletableException here
         if (currentIterator.hasNext()) {
-          //LOG.info("iterating over current iterator");
           this.current = currentIterator.next();
-          long nextMethodEndTime = System.currentTimeMillis();
-//          LOG.info(
-//              "total time taken in next method: {} ms", nextMethodEndTime - nextMethodStartTime);
           return true;
         } else if (tasks.hasNext()) {
-          if (count>=1) {
-            LOG.info("attempting to get downloaded s3 files....might block at time: {}", new Date());
-            prefetchedS3FileFutures.stream()
-                    .map(CompletableFuture::join)
-                    .collect(Collectors.toList());
+          this.currentTask = tasks.next();
+          if (count >= 1) {
+            // we prefetch the second task's file
+            LOG.info(
+                "attempting to get downloaded s3 files....might block at time: {}", new Date());
+            prefetchS3FileForTask(this.currentTask).stream()
+                .map(CompletableFuture::join)
+                .collect(Collectors.toList());
             s3DownloadEndTime = System.currentTimeMillis();
             LOG.info("was able to get prefetched data at: {}", new Date());
-            LOG.info("total time to download s3 files: {}", s3DownloadEndTime - s3DownloadStartTime);
-            if (tasksCopy.hasNext()) {
-              LOG.info("next task available in tasksCopy, kick off prefetch data: {}", new Date());
-              prefetchedS3FileFutures = prefetchS3FileForTask(tasksCopy.next());
-            } else {
-              LOG.info("no more tasks in tasksCopy");
-            }
+            LOG.info(
+                "total time to download s3 files: {}", s3DownloadEndTime - s3DownloadStartTime);
           } else {
+            //  we don't prefetch the first task's file
             LOG.info("opening data for first task");
           }
           this.currentIterator.close();
-          this.currentTask = tasks.next();
-          // s3 file for this task should have been downloaded, as we do a join in L188
           this.currentIterator = open(currentTask);
           count += 1;
         } else {
@@ -255,7 +242,10 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   }
 
   private List<CompletableFuture<Object>> prefetchS3FileForTask(TaskT task) throws IOException {
-    LOG.info("prefetching s3 file, starting to download s3 files at time: {}", new Date());
+    LOG.info(
+        "fetching s3 file for task: {}, starting to download s3 files at time: {}",
+        task,
+        new Date());
     s3DownloadStartTime = System.currentTimeMillis();
     return referencedFiles(task)
         .map(this::toEncryptedInputFile)
@@ -264,13 +254,49 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
             inputFile ->
                 CompletableFuture.supplyAsync(
                     () -> {
-                      downloadFileToHadoop(inputFile);
+                      try {
+                        downloadFileToHadoop(inputFile);
+                      } catch (IOException e) {
+                        throw new RuntimeException(e);
+                      }
                       return null;
                     }))
         .collect(Collectors.toList());
   }
 
-  private void downloadFileToHadoop(InputFile inputFile) {
+  private List<CompletableFuture<Object>> prefetchS3Files() throws IOException {
+    Preconditions.checkNotNull(inputFiles().values(), "input files should be non-null");
+
+    // copy tasksCache to a list and remove first task, so that we don't prefetch data for the first
+    // task
+    List<TaskT> copy = Lists.newArrayList(tasksCache);
+    copy.remove(0);
+
+    // get all unique files
+    List<InputFile> inputFiles =
+        copy.stream()
+            .flatMap(this::referencedFiles)
+            .map(this::toEncryptedInputFile)
+            .map(file -> table.encryption().decrypt(file))
+            .collect(Collectors.toList());
+    Set<InputFile> uniqueFiles = new HashSet<>(inputFiles);
+
+    return uniqueFiles.stream()
+        .map(
+            inputFile ->
+                CompletableFuture.supplyAsync(
+                    () -> {
+                      try {
+                        downloadFileToHadoop(inputFile);
+                      } catch (IOException e) {
+                        throw new RuntimeException(e);
+                      }
+                      return null;
+                    }))
+        .collect(Collectors.toList());
+  }
+
+  private void downloadFileToHadoop(InputFile inputFile) throws IOException {
     LOG.info("supply async for input file: {}", inputFile.location());
     SeekableInputStream inputStream = inputFile.newStream();
     try {
@@ -282,27 +308,51 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
         LOG.info("temp directory already created locally");
       }
       Path path = Paths.get(tempDir.toString(), FileFormat.PARQUET.addExtension(filename));
-      LOG.info("checking if file already exists at path: {}", path.toString());
+      LOG.info("checking if file already exists at path: {}", path);
       if (fileIO.newInputFile(path.toString()).exists()
-          && fileIO.newInputFile(path.toString()).getLength() > 0) {
-        LOG.info("file: {} was already created, and length is non-empty, returning", path);
+          && fileIO.newInputFile(path.toString()).getLength() == inputFile.getLength()) {
+        LOG.info("file: {} was already created, and full length has been written, returning", path);
         this.s3ToLocal.put(inputFile.location(), path.toString());
         inputStream.close();
         return;
+      } else if (fileIO.newInputFile(path.toString()).exists()
+          && fileIO.newInputFile(path.toString()).getLength() < inputFile.getLength()) {
+        // TODO: this is super naive, the other thread could have died, we might have to do this
+        // more intelligently
+        long localFilelength = fileIO.newInputFile(path.toString()).getLength() / (1024 * 1024);
+        long remoteFilelength = inputFile.getLength() / (1024 * 1024);
+        LOG.info(
+            "file: {} was created, blocking till all of the data is written.. local file length: {}mb, remote file length: {}mb",
+            path,
+            localFilelength,
+            remoteFilelength);
+        while (true) {
+          if (fileIO.newInputFile(path.toString()).getLength() < inputFile.getLength()) {
+            Thread.sleep(1000);
+          } else {
+            break;
+          }
+        }
+        inputStream.close();
+        return;
+      } else {
+        LOG.info("file does not exist, creating new one at: {}", path);
+        OutputFile outputFile = fileIO.newOutputFile(path.toString());
+        PositionOutputStream os = outputFile.createOrOverwrite();
+        long s3WriteToDiskStartTime = System.currentTimeMillis();
+        LOG.info("copying all of input stream to the locally created file at: {}", path);
+        ByteStreams.copy(inputStream, os);
+        LOG.info(
+            "total time to write s3 file to local disk: {}",
+            System.currentTimeMillis() - s3WriteToDiskStartTime);
+        this.s3ToLocal.put(inputFile.location(), outputFile.location());
+        inputStream.close();
+        os.close();
       }
-      LOG.info("file does not exist, creating new one at: {}", path.toString());
-      OutputFile outputFile = fileIO.newOutputFile(path.toString());
-      PositionOutputStream os = outputFile.createOrOverwrite();
-      long s3WriteToDiskStartTime = System.currentTimeMillis();
-      ByteStreams.copy(inputStream, os);
-      LOG.info(
-          "total time to write s3 file to local disk: {}",
-          System.currentTimeMillis() - s3WriteToDiskStartTime);
-      this.s3ToLocal.put(inputFile.location(), outputFile.location());
-      inputStream.close();
-      os.close();
-    } catch (IOException | URISyntaxException e) {
+    } catch (IOException | URISyntaxException | InterruptedException e) {
       throw new RuntimeException(e);
+    } finally {
+      inputStream.close();
     }
   }
 
@@ -332,7 +382,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private Map<String, InputFile> inputFiles() {
     if (lazyInputFiles == null) {
       Stream<EncryptedInputFile> encryptedFiles =
-              taskGroup.tasks().stream().flatMap(this::referencedFiles).map(this::toEncryptedInputFile);
+          taskGroup.tasks().stream().flatMap(this::referencedFiles).map(this::toEncryptedInputFile);
 
       // decrypt with the batch call to avoid multiple RPCs to a key server, if possible
       Iterable<InputFile> decryptedFiles = table.encryption().decrypt(encryptedFiles::iterator);
