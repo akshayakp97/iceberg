@@ -64,9 +64,10 @@ public class TestAwsGlueTable {
                 .config("spark.sql.catalog.spark_catalog.catalog-impl", "org.apache.iceberg.aws.glue.GlueCatalog")
                 .config("spark.sql.defaultUrlStreamHandlerFactory.enabled", "false")
                 .getOrCreate();
-        Dataset<Row> df = spark.sql("select * from tpcds_3000_iceberg_parq.iceberg_parquet_large_file_size_small_row_group");
-        DataFrameWriter<Row> dataFrameWriter = df.write();
-        dataFrameWriter.csv("/var/folders/_h/ps0_3wwx3p96z27n9md14d7s_2v418/T/spark_iceberg_data_prefetch/output_files/output2.csv");
+        spark.sql("select * from tpcds_3000_iceberg_parq.2gigs_tbl_multiple_files").show();
+//        Dataset<Row> df = spark.sql("select * from tpcds_3000_iceberg_parq.2gigs_tbl_multiple_files");
+//        DataFrameWriter<Row> dataFrameWriter = df.write();
+//        dataFrameWriter.csv("/var/folders/_h/ps0_3wwx3p96z27n9md14d7s_2v418/T/spark_iceberg_data_prefetch/output_files/output6.csv");
     }
 
 }

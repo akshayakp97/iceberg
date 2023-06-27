@@ -206,7 +206,7 @@ abstract class SparkPartitioningAwareScan<T extends PartitionScanTask> extends S
                 scan.splitOpenFileCost());
         this.taskGroups = Lists.newArrayList(plannedTaskGroups);
 
-        LOG.debug(
+        LOG.info(
             "Planned {} task group(s) without data grouping for table {}",
             taskGroups.size(),
             table().name());
