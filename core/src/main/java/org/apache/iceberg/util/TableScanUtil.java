@@ -215,6 +215,7 @@ public class TableScanUtil {
 
   @SuppressWarnings("unchecked")
   public static <T extends ScanTask> List<T> mergeTasks(List<T> tasks) {
+    int size1 = tasks.size();
     List<T> mergedTasks = Lists.newArrayList();
 
     T lastTask = null;
@@ -243,6 +244,7 @@ public class TableScanUtil {
       mergedTasks.add(lastTask);
     }
 
+    int size2 = mergedTasks.size();
     return mergedTasks;
   }
 

@@ -128,7 +128,6 @@ public class BinPacking {
 
         if (bin != null) {
           bin.add(item, weight);
-
         } else {
           bin = newBin();
           bin.add(item, weight);
