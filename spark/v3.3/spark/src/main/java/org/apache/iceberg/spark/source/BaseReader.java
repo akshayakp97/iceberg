@@ -184,6 +184,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
           return true;
         } else if (tasks.hasNext()) {
           this.currentTask = tasks.next();
+          LOG.info("reading data for the task...: {}", this.currentTask);
           if (count >= 1) {
             // we prefetch the second task's file
             LOG.info(
@@ -255,7 +256,10 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
                 CompletableFuture.supplyAsync(
                     () -> {
                       try {
-                        downloadFileToHadoop(inputFile);
+                        downloadFileToHadoop(
+                            inputFile,
+                            task.asFileScanTask().start(),
+                            task.asFileScanTask().length());
                       } catch (IOException e) {
                         throw new RuntimeException(e);
                       }
@@ -287,7 +291,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
                 CompletableFuture.supplyAsync(
                     () -> {
                       try {
-                        downloadFileToHadoop(inputFile);
+                        downloadFileToHadoop(inputFile, 0, inputFile.getLength());
                       } catch (IOException e) {
                         throw new RuntimeException(e);
                       }
@@ -296,7 +300,8 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
         .collect(Collectors.toList());
   }
 
-  private void downloadFileToHadoop(InputFile inputFile) throws IOException {
+  private void downloadFileToHadoop(InputFile inputFile, long start, long length)
+      throws IOException {
     LOG.info("supply async for input file: {}", inputFile.location());
     SeekableInputStream inputStream = inputFile.newStream();
     try {
@@ -320,19 +325,28 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
         // TODO: this is super naive, the other thread could have died, we might have to do this
         // more intelligently
         long localFilelength = fileIO.newInputFile(path.toString()).getLength() / (1024 * 1024);
-        long remoteFilelength = inputFile.getLength() / (1024 * 1024);
-        LOG.info(
-            "file: {} was created, blocking till all of the data is written.. local file length: {}mb, remote file length: {}mb",
-            path,
-            localFilelength,
-            remoteFilelength);
-        while (true) {
-          if (fileIO.newInputFile(path.toString()).getLength() < inputFile.getLength()) {
-            Thread.sleep(1000);
-          } else {
-            break;
+        long dataToBeRead = (start + length) / (1024 * 1024);
+        if (localFilelength >= dataToBeRead) {
+          LOG.info(
+              "file: {} was created and has data of size: {}mb written.. data needed for this task: {}mb is ready to be read, returning",
+              path,
+              localFilelength,
+              dataToBeRead);
+        } else {
+          LOG.info(
+              "file: {} was created, blocking till all of the data is written.. local file length: {}mb, data to be read: {}mb",
+              path,
+              localFilelength,
+              dataToBeRead);
+          while (true) {
+            if (fileIO.newInputFile(path.toString()).getLength() < dataToBeRead) {
+              Thread.sleep(500);
+            } else {
+              break;
+            }
           }
         }
+        this.s3ToLocal.put(inputFile.location(), path.toString());
         inputStream.close();
         return;
       } else {
