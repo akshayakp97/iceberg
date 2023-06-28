@@ -16,40 +16,38 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.iceberg;
+package org.apache.iceberg.spark.source;
 
-import java.util.List;
+import org.apache.iceberg.FileRangeCache;
+import org.apache.iceberg.io.InputFile;
+import org.apache.iceberg.io.SeekableInputStream;
 
-/** A scan task over a range of bytes in a single data file. */
-public interface FileScanTask extends ContentScanTask<DataFile>, SplittableScanTask<FileScanTask> {
-  /**
-   * A list of {@link DeleteFile delete files} to apply when reading the task's data file.
-   *
-   * @return a list of delete files to apply
-   */
-  List<DeleteFile> deletes();
+public class CachedInputFile implements InputFile {
+  InputFile inputFile;
+  FileRangeCache fileRangeCache;
 
-  @Override
-  default long sizeBytes() {
-    return length() + deletes().stream().mapToLong(ContentFile::fileSizeInBytes).sum();
+  public CachedInputFile(FileRangeCache fileRangeCache, InputFile inputFile) {
+    this.fileRangeCache = fileRangeCache;
+    this.inputFile = inputFile;
   }
 
   @Override
-  default int filesCount() {
-    return 1 + deletes().size();
+  public long getLength() {
+    return inputFile.getLength();
   }
 
   @Override
-  default boolean isFileScanTask() {
-    return true;
+  public SeekableInputStream newStream() {
+    return new CachedInputStream(fileRangeCache, inputFile);
   }
 
   @Override
-  default FileScanTask asFileScanTask() {
-    return this;
+  public String location() {
+    return inputFile.location();
   }
 
-  void setCache(FileRangeCache rangeCache);
-
-  FileRangeCache getCache();
+  @Override
+  public boolean exists() {
+    return inputFile.exists();
+  }
 }

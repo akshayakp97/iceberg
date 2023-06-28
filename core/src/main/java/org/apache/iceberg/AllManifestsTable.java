@@ -156,6 +156,7 @@ public class AllManifestsTable extends BaseMetadataTable {
     private final Expression residual;
     private final long referenceSnapshotId;
     private DataFile lazyDataFile = null;
+    FileRangeCache fileRangeCache;
 
     ManifestListReadTask(
         FileIO io,
@@ -175,6 +176,16 @@ public class AllManifestsTable extends BaseMetadataTable {
     @Override
     public List<DeleteFile> deletes() {
       return ImmutableList.of();
+    }
+
+    @Override
+    public void setCache(FileRangeCache rangeCache) {
+      this.fileRangeCache = rangeCache;
+    }
+
+    @Override
+    public FileRangeCache getCache() {
+      return this.fileRangeCache;
     }
 
     @Override

@@ -28,6 +28,8 @@ public class BaseFileScanTask extends BaseContentScanTask<FileScanTask, DataFile
     implements FileScanTask {
   private final DeleteFile[] deletes;
 
+  FileRangeCache fileRangeCache;
+
   public BaseFileScanTask(
       DataFile file,
       DeleteFile[] deletes,
@@ -53,11 +55,22 @@ public class BaseFileScanTask extends BaseContentScanTask<FileScanTask, DataFile
     return ImmutableList.copyOf(deletes);
   }
 
+  @Override
+  public void setCache(FileRangeCache rangeCache) {
+    this.fileRangeCache = rangeCache;
+  }
+
+  @Override
+  public FileRangeCache getCache() {
+    return this.fileRangeCache;
+  }
+
   @VisibleForTesting
   static final class SplitScanTask implements FileScanTask, MergeableScanTask<SplitScanTask> {
     private final long len;
     private final long offset;
     private final FileScanTask fileScanTask;
+    private FileRangeCache fileRangeCache;
 
     SplitScanTask(long offset, long len, FileScanTask fileScanTask) {
       this.offset = offset;
@@ -73,6 +86,16 @@ public class BaseFileScanTask extends BaseContentScanTask<FileScanTask, DataFile
     @Override
     public List<DeleteFile> deletes() {
       return fileScanTask.deletes();
+    }
+
+    @Override
+    public void setCache(FileRangeCache rangeCache) {
+      this.fileRangeCache = rangeCache;
+    }
+
+    @Override
+    public FileRangeCache getCache() {
+      return this.fileRangeCache;
     }
 
     @Override

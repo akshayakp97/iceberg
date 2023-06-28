@@ -41,10 +41,13 @@ import java.util.stream.Stream;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.util.Utf8;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.iceberg.CacheType;
 import org.apache.iceberg.ContentFile;
 import org.apache.iceberg.ContentScanTask;
 import org.apache.iceberg.DeleteFile;
 import org.apache.iceberg.FileFormat;
+import org.apache.iceberg.FileRangeCache;
+import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.MetadataColumns;
 import org.apache.iceberg.Partitioning;
 import org.apache.iceberg.ScanTask;
@@ -76,6 +79,7 @@ import org.apache.iceberg.types.Types.NestedField;
 import org.apache.iceberg.types.Types.StructType;
 import org.apache.iceberg.util.ByteBuffers;
 import org.apache.iceberg.util.PartitionUtil;
+import org.apache.parquet.bytes.BytesUtils;
 import org.apache.spark.rdd.InputFileBlockHolder;
 import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow;
@@ -102,7 +106,6 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private Map<String, InputFile> lazyInputFiles;
   private CloseableIterator<T> currentIterator;
   private final long constructorInitiationTime;
-  private long allS3FilesDownloadStartTime;
   private long s3DownloadStartTime;
   private long nextMethodStartTime;
   private Map<String, String> s3ToLocal;
@@ -125,6 +128,34 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     this.tasksCache.addAll(taskGroup.tasks());
     LOG.info("tasks list size : {}", tasksCache.size());
     this.tasks = tasksCache.iterator();
+
+    FileRangeCache cache = new FileRangeCache(table);
+    for (TaskT task : tasksCache) {
+      String path = task.asFileScanTask().file().path().toString();
+      InputFile inputFile = inputFiles().get(path);
+      cache.putIfAbsent(
+          path, task.asFileScanTask().start(), task.asFileScanTask().length(), CacheType.DISK);
+      // footer bytes to be read from memory
+      cache.putIfAbsent(path, inputFile.getLength() - 8, inputFile.getLength(), CacheType.MEMORY);
+      // meta data index to be read from memory
+      SeekableInputStream is = inputFile.newStream();
+      int fileMetadataLength;
+      try {
+        is.seek(inputFile.getLength() - 8);
+        fileMetadataLength = BytesUtils.readIntLittleEndian(is);
+        is.close();
+      } catch (IOException e) {
+        throw new RuntimeException("could not open input file to get metadata length");
+      }
+      // meta data start index should be read from memory
+      cache.putIfAbsent(
+          path,
+          inputFile.getLength() - fileMetadataLength - 8,
+          inputFile.getLength(),
+          CacheType.MEMORY);
+      task.asFileScanTask().setCache(cache);
+    }
+
     this.currentIterator = CloseableIterator.empty();
     this.tableSchema = tableSchema;
     this.expectedSchema = expectedSchema;
@@ -184,7 +215,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
           return true;
         } else if (tasks.hasNext()) {
           this.currentTask = tasks.next();
-          LOG.info("reading data for the task...: {}", this.currentTask);
+          LOG.info("reading data for the task...: {} at {}", this.currentTask, new Date());
           if (count >= 1) {
             // we prefetch the second task's file
             LOG.info(
@@ -256,7 +287,10 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
                 CompletableFuture.supplyAsync(
                     () -> {
                       try {
-                        downloadFileToHadoop(inputFile, 0, inputFile.getLength());
+                        downloadFileToHadoop(
+                            inputFile,
+                            task.asFileScanTask().start(),
+                            task.asFileScanTask().length());
                       } catch (IOException e) {
                         throw new RuntimeException(e);
                       }
@@ -268,8 +302,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private List<CompletableFuture<Object>> prefetchS3Files() throws IOException {
     Preconditions.checkNotNull(inputFiles().values(), "input files should be non-null");
 
-    // copy tasksCache to a list and remove first task, so that we don't prefetch data for the first
-    // task
+    // remove first task, since we skip prefetch for first task
     List<TaskT> copy = Lists.newArrayList(tasksCache);
     copy.remove(0);
 
@@ -390,6 +423,17 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
       throw new RuntimeException(String.format("s3 file doesnt exist :%s", location));
     }
     return fileIO.newInputFile(this.s3ToLocal.get(location));
+  }
+
+  protected InputFile getCachedInputFile(FileScanTask task, String location) {
+    if (count == 0) {
+      return inputFiles().get(location);
+    }
+    if (!this.s3ToLocal.containsKey(location)) {
+      LOG.info("file doesn't exist locally, printing hashmap keys: {}", this.s3ToLocal.keySet());
+      throw new RuntimeException(String.format("s3 file doesnt exist :%s", location));
+    }
+    return new CachedInputFile(task.getCache(), inputFiles().get(location));
   }
 
   private Map<String, InputFile> inputFiles() {

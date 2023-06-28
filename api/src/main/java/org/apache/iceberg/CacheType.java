@@ -18,38 +18,7 @@
  */
 package org.apache.iceberg;
 
-import java.util.List;
-
-/** A scan task over a range of bytes in a single data file. */
-public interface FileScanTask extends ContentScanTask<DataFile>, SplittableScanTask<FileScanTask> {
-  /**
-   * A list of {@link DeleteFile delete files} to apply when reading the task's data file.
-   *
-   * @return a list of delete files to apply
-   */
-  List<DeleteFile> deletes();
-
-  @Override
-  default long sizeBytes() {
-    return length() + deletes().stream().mapToLong(ContentFile::fileSizeInBytes).sum();
-  }
-
-  @Override
-  default int filesCount() {
-    return 1 + deletes().size();
-  }
-
-  @Override
-  default boolean isFileScanTask() {
-    return true;
-  }
-
-  @Override
-  default FileScanTask asFileScanTask() {
-    return this;
-  }
-
-  void setCache(FileRangeCache rangeCache);
-
-  FileRangeCache getCache();
+public enum CacheType {
+  DISK,
+  MEMORY
 }

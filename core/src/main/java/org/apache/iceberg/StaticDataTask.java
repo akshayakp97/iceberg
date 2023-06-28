@@ -50,6 +50,7 @@ class StaticDataTask implements DataTask {
   private final StructLike[] rows;
   private final Schema tableSchema;
   private final Schema projectedSchema;
+  FileRangeCache fileRangeCache;
 
   private StaticDataTask(
       InputFile metadata, Schema tableSchema, Schema projectedSchema, StructLike[] rows) {
@@ -67,6 +68,16 @@ class StaticDataTask implements DataTask {
   @Override
   public List<DeleteFile> deletes() {
     return ImmutableList.of();
+  }
+
+  @Override
+  public void setCache(FileRangeCache rangeCache) {
+    this.fileRangeCache = rangeCache;
+  }
+
+  @Override
+  public FileRangeCache getCache() {
+    return this.fileRangeCache;
   }
 
   @Override
