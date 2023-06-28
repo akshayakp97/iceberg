@@ -221,7 +221,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   }
 
   public T get() {
-    LOG.info("returning record: {}", current);
+    LOG.info("returning record: {}, at: {}", current, new Date());
     return current;
   }
 
@@ -256,10 +256,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
                 CompletableFuture.supplyAsync(
                     () -> {
                       try {
-                        downloadFileToHadoop(
-                            inputFile,
-                            task.asFileScanTask().start(),
-                            task.asFileScanTask().length());
+                        downloadFileToHadoop(inputFile, 0, inputFile.getLength());
                       } catch (IOException e) {
                         throw new RuntimeException(e);
                       }
@@ -339,9 +336,11 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
               localFilelength,
               dataToBeRead);
           while (true) {
-            if (fileIO.newInputFile(path.toString()).getLength() < dataToBeRead) {
+            localFilelength = fileIO.newInputFile(path.toString()).getLength() / (1024 * 1024);
+            if (localFilelength < dataToBeRead) {
               Thread.sleep(500);
             } else {
+              LOG.info("all data write complete");
               break;
             }
           }
