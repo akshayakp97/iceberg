@@ -18,6 +18,10 @@
  */
 package org.apache.iceberg.spark;
 
+import java.util.UUID;
+import org.apache.spark.sql.DataFrameWriter;
+import org.apache.spark.sql.Dataset;
+import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
 import org.junit.Test;
 import org.slf4j.Logger;
@@ -70,17 +74,15 @@ public class TestAwsGlueTable {
                 "org.apache.iceberg.aws.glue.GlueCatalog")
             .config("spark.sql.defaultUrlStreamHandlerFactory.enabled", "false")
             .getOrCreate();
-    spark.sql("select * from tpcds_3000_iceberg_parq.2gigs_tbl_multiple_files").show(4709181);
-    //    Dataset<Row> df =
-    //        spark.sql("select * from tpcds_3000_iceberg_parq.2gigs_tbl_multiple_files");
-    //    DataFrameWriter<Row> dataFrameWriter = df.write();
-    //
-    //    String outputDirName =
-    //
-    // "/var/folders/_h/ps0_3wwx3p96z27n9md14d7s_2v418/T/spark_iceberg_data_prefetch/output_files/"
-    //            + "output_"
-    //            + UUID.randomUUID().toString();
-    //    LOG.info("writing output to: {}", outputDirName);
-    //    dataFrameWriter.csv(outputDirName);
+    // spark.sql("select * from tpcds_3000_iceberg_parq.2gigs_tbl_multiple_files").show(4709181);
+    Dataset<Row> df = spark.sql("select * from tpcds_3000_iceberg_parq.2gigs_tbl_multiple_files");
+    DataFrameWriter<Row> dataFrameWriter = df.write();
+
+    String outputDirName =
+        "/var/folders/_h/ps0_3wwx3p96z27n9md14d7s_2v418/T/spark_iceberg_data_prefetch/output_files/"
+            + "output_"
+            + UUID.randomUUID().toString();
+    LOG.info("writing output to: {}", outputDirName);
+    dataFrameWriter.csv(outputDirName);
   }
 }
