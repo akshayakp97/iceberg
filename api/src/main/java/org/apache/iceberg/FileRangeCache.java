@@ -18,11 +18,9 @@
  */
 package org.apache.iceberg;
 
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Map;
+import org.apache.iceberg.io.InputFile;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,52 +28,60 @@ import org.slf4j.LoggerFactory;
 public class FileRangeCache {
   private static final Logger LOG = LoggerFactory.getLogger(FileRangeCache.class);
   Table table;
-  Map<String, CacheType> map = Maps.newHashMap();
+  Map<String, CacheType> byteRangeToCacheType = Maps.newHashMap();
+
+  Map<String, Long> fileToCacheStartPosition = Maps.newHashMap();
+  Map<String, Integer> fileToCacheSize = Maps.newHashMap();
+
+  Map<String, byte[]> fileToCache = Maps.newHashMap();
 
   public FileRangeCache(Table table) {
     this.table = table;
   }
 
   public void putIfAbsent(String path, long start, long length, CacheType cacheType) {
-    String key = path + "_" + start + "_" + length;
-    map.putIfAbsent(key, cacheType);
+    String key = getKey(path, start, length);
+    byteRangeToCacheType.putIfAbsent(key, cacheType);
+    if (cacheType.equals(CacheType.MEMORY)) {
+      fileToCacheStartPosition.put(path, start);
+      // read metadata without footer
+      fileToCacheSize.put(path, (int) (length - start - 8));
+    }
   }
 
-  public CacheType get(String path, long start, long length) {
-    String key = path + "_" + start + "_" + length;
-    if (!map.containsKey(key)) {
+  public CacheType getCacheType(String path, long start, long length) {
+    String key = getKey(path, start, length);
+    if (!byteRangeToCacheType.containsKey(key)) {
       // return disk by default;
       return CacheType.DISK;
     }
-    for (String k : map.keySet()) {
-      if (k.contains(path)) {
-        LOG.info("key and value for this file in the hash map: {}, {}", k, map.get(k));
-      }
-    }
-    return map.get(key);
+    return byteRangeToCacheType.get(key);
   }
 
-  // this is common code with BaseReader
-  public String getLocalFileName(String s3Filename) {
-    String filename;
-    try {
-      filename = getFileName(s3Filename);
-    } catch (URISyntaxException e) {
-      throw new RuntimeException(e);
-    }
-    Path tempDir = Paths.get(System.getProperty("java.io.tmpdir"), table.name());
-    Path path = Paths.get(tempDir.toString(), FileFormat.PARQUET.addExtension(filename));
-    return path.toString();
+  public void setupCache(InputFile inputFile, byte[] cache) {
+    fileToCache.put(inputFile.location(), cache);
   }
 
-  private String getFileName(String fileLocation) throws URISyntaxException {
-    URI uri = new URI(fileLocation);
-    String path = uri.normalize().getPath();
-    int idx = path.lastIndexOf("/");
-    String filename = path;
-    if (idx >= 0) {
-      filename = path.substring(idx + 1, path.length());
+  public Long getCacheStartPositionForFile(String path) {
+    return fileToCacheStartPosition.get(path);
+  }
+
+  public Boolean doesFileExistInCache(String path) {
+    return fileToCache.containsKey(path);
+  }
+
+  public byte[] getCachedFooter(String path) {
+    if (!fileToCache.containsKey(path)) {
+      throw new RuntimeException(String.format("cache not found for file: %s", path));
     }
-    return filename;
+    return fileToCache.get(path);
+  }
+
+  private String getKey(String path, long start, long length) {
+    return path + "_" + start + "_" + length;
+  }
+
+  public Path getCachedFilePath(String inputFileURI) {
+    return CachedFileNameResolver.getCacheFileURI(table, inputFileURI);
   }
 }

@@ -32,10 +32,10 @@ import org.slf4j.LoggerFactory;
 
 public class CachedInputStream extends SeekableInputStream implements RangeReadable {
   private static final Logger LOG = LoggerFactory.getLogger(CachedInputStream.class);
-
   FileRangeCache fileRangeCache;
   InputFile inputFile;
-  SeekableInputStream currentInputStream;
+  SeekableInputStream delegate;
+  long currentPos;
 
   public CachedInputStream(FileRangeCache fileRangeCache, InputFile inputFile) {
     this.fileRangeCache = fileRangeCache;
@@ -44,42 +44,61 @@ public class CachedInputStream extends SeekableInputStream implements RangeReada
 
   @Override
   public long getPos() throws IOException {
-    if (currentInputStream == null) {
+    if (delegate == null) {
       throw new RuntimeException("currentInputStream wasn't set?");
     }
-    return currentInputStream.getPos();
+    return delegate.getPos();
   }
 
   @Override
   public void seek(long newPos) throws IOException {
     LOG.info("CachingInputStream.. seeking position: {}", newPos);
-    switch (fileRangeCache.get(inputFile.location(), newPos, inputFile.getLength())) {
+    switch (fileRangeCache.getCacheType(inputFile.location(), newPos, inputFile.getLength())) {
       case MEMORY:
-        currentInputStream = inputFile.newStream();
+        delegate = inputFile.newStream();
         break;
       default:
         ResolvingFileIO fileIO = new ResolvingFileIO();
         Map<String, String> properties = Maps.newHashMap();
         fileIO.initialize(properties);
         fileIO.setConf(new Configuration());
-        currentInputStream =
-            fileIO.newInputFile(fileRangeCache.getLocalFileName(inputFile.location())).newStream();
+        delegate =
+            fileIO
+                .newInputFile(fileRangeCache.getCachedFilePath(inputFile.location()).toString())
+                .newStream();
     }
-    currentInputStream.seek(newPos);
+    currentPos = newPos;
+    delegate.seek(newPos);
   }
 
   @Override
   public int read() throws IOException {
-    return currentInputStream.read();
+    return delegate.read();
+  }
+
+  @Override
+  public int read(byte b[], int off, int len) throws IOException {
+    // return cached data here
+    if (currentPos >= fileRangeCache.getCacheStartPositionForFile(inputFile.location())) {
+      byte[] cachedData = fileRangeCache.getCachedFooter(inputFile.location());
+      int sourcePosition = 0;
+      if (currentPos > fileRangeCache.getCacheStartPositionForFile(inputFile.location())) {
+        sourcePosition = (int) (currentPos - fileRangeCache.getCacheStartPositionForFile(inputFile.location()));
+        sourcePosition = sourcePosition + 4;
+      }
+      System.arraycopy(cachedData, sourcePosition, b, 0, b.length);
+      return b.length;
+    }
+    return delegate.read(b, off, len);
   }
 
   @Override
   public void readFully(long position, byte[] buffer, int offset, int length) throws IOException {
-    ((RangeReadable) currentInputStream).readFully(position, buffer, offset, length);
+    ((RangeReadable) delegate).readFully(position, buffer, offset, length);
   }
 
   @Override
   public int readTail(byte[] buffer, int offset, int length) throws IOException {
-    return ((RangeReadable) currentInputStream).readTail(buffer, offset, length);
+    return ((RangeReadable) delegate).readTail(buffer, offset, length);
   }
 }

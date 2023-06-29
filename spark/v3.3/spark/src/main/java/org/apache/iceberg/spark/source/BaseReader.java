@@ -21,13 +21,10 @@ package org.apache.iceberg.spark.source;
 import java.io.Closeable;
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Collection;
 import java.util.Date;
 import java.util.HashSet;
@@ -42,10 +39,10 @@ import org.apache.avro.generic.GenericData;
 import org.apache.avro.util.Utf8;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.iceberg.CacheType;
+import org.apache.iceberg.CachedFileNameResolver;
 import org.apache.iceberg.ContentFile;
 import org.apache.iceberg.ContentScanTask;
 import org.apache.iceberg.DeleteFile;
-import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.FileRangeCache;
 import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.MetadataColumns;
@@ -61,6 +58,7 @@ import org.apache.iceberg.deletes.DeleteCounter;
 import org.apache.iceberg.encryption.EncryptedFiles;
 import org.apache.iceberg.encryption.EncryptedInputFile;
 import org.apache.iceberg.io.CloseableIterator;
+import org.apache.iceberg.io.IOUtil;
 import org.apache.iceberg.io.InputFile;
 import org.apache.iceberg.io.OutputFile;
 import org.apache.iceberg.io.PositionOutputStream;
@@ -143,6 +141,13 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
       try {
         is.seek(inputFile.getLength() - 8);
         fileMetadataLength = BytesUtils.readIntLittleEndian(is);
+        if (!cache.doesFileExistInCache(inputFile.location())) {
+          long fileMetadataIdx = inputFile.getLength() - 8 - fileMetadataLength;
+          is.seek(fileMetadataIdx);
+          byte[] cacheArr = new byte[fileMetadataLength + 8];
+          IOUtil.readFully(is, cacheArr, 0, fileMetadataLength + 8);
+          cache.setupCache(inputFile, cacheArr);
+        }
         is.close();
       } catch (IOException e) {
         throw new RuntimeException("could not open input file to get metadata length");
@@ -165,18 +170,19 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
         nameMappingString != null ? NameMappingParser.fromJson(nameMappingString) : null;
     this.counter = new DeleteCounter();
     this.s3ToLocal = Maps.newConcurrentMap();
-
     constructorInitiationTime = System.currentTimeMillis();
     fileIO = new ResolvingFileIO();
     Map<String, String> properties = Maps.newHashMap();
     fileIO.initialize(properties);
     fileIO.setConf(new Configuration());
+
     try {
       LOG.info("attempting to download all files for the task group at: {}", new Date());
       prefetchS3Files();
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
+
     LOG.info("Reading table: {} using scan task group: {}", table.name(), taskGroup);
   }
 
@@ -207,9 +213,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   public boolean next() throws IOException {
     try {
       nextMethodStartTime = System.currentTimeMillis();
-      // LOG.info("at next method");
       while (true) {
-        // TODO: have to check if we got a CompletableException here
         if (currentIterator.hasNext()) {
           this.current = currentIterator.next();
           return true;
@@ -217,7 +221,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
           this.currentTask = tasks.next();
           LOG.info("reading data for the task...: {} at {}", this.currentTask, new Date());
           if (count >= 1) {
-            // we prefetch the second task's file
+            // we skip prefetch for first task
             LOG.info(
                 "attempting to get downloaded s3 files....might block at time: {}", new Date());
             prefetchS3FileForTask(this.currentTask).stream()
@@ -313,7 +317,21 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
             .map(this::toEncryptedInputFile)
             .map(file -> table.encryption().decrypt(file))
             .collect(Collectors.toList());
-    Set<InputFile> uniqueFiles = new HashSet<>(inputFiles);
+
+    Set<String> uniqueLocations = new HashSet<>();
+
+    Set<InputFile> uniqueFiles =
+        inputFiles.stream()
+            .filter(
+                inputFile -> {
+                  if (uniqueLocations.contains(inputFile.location())) {
+                    return false;
+                  } else {
+                    uniqueLocations.add(inputFile.location());
+                    return true;
+                  }
+                })
+            .collect(Collectors.toSet());
 
     return uniqueFiles.stream()
         .map(
@@ -332,17 +350,19 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
 
   private void downloadFileToHadoop(InputFile inputFile, long start, long length)
       throws IOException {
-    LOG.info("supply async for input file: {}", inputFile.location());
+    long dataToBeRead = (start + length) / (1024 * 1024);
+    LOG.info(
+        "downloading input file: {} locally..total data to be read: {}mb",
+        inputFile.location(),
+        dataToBeRead);
     SeekableInputStream inputStream = inputFile.newStream();
     try {
-      String filename = getFileName(inputFile.location());
-      Path tempDir = Paths.get(System.getProperty("java.io.tmpdir"), table.name());
       try {
-        Files.createDirectory(tempDir);
+        Files.createDirectory(CachedFileNameResolver.getCacheDirectoryPath(table));
       } catch (FileAlreadyExistsException e) {
-        LOG.info("temp directory already created locally");
+        LOG.debug("temp directory already created locally");
       }
-      Path path = Paths.get(tempDir.toString(), FileFormat.PARQUET.addExtension(filename));
+      Path path = CachedFileNameResolver.getCacheFileURI(table, inputFile.location());
       LOG.info("checking if file already exists at path: {}", path);
       if (fileIO.newInputFile(path.toString()).exists()
           && fileIO.newInputFile(path.toString()).getLength() == inputFile.getLength()) {
@@ -352,10 +372,8 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
         return;
       } else if (fileIO.newInputFile(path.toString()).exists()
           && fileIO.newInputFile(path.toString()).getLength() < inputFile.getLength()) {
-        // TODO: this is super naive, the other thread could have died, we might have to do this
-        // more intelligently
+        // TODO: this might block forever if the other thread died, setup timeout
         long localFilelength = fileIO.newInputFile(path.toString()).getLength() / (1024 * 1024);
-        long dataToBeRead = (start + length) / (1024 * 1024);
         if (localFilelength >= dataToBeRead) {
           LOG.info(
               "file: {} was created and has data of size: {}mb written.. data needed for this task: {}mb is ready to be read, returning",
@@ -395,23 +413,11 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
         inputStream.close();
         os.close();
       }
-    } catch (IOException | URISyntaxException | InterruptedException e) {
+    } catch (IOException | InterruptedException e) {
       throw new RuntimeException(e);
     } finally {
       inputStream.close();
     }
-  }
-
-  private String getFileName(String fileLocation) throws URISyntaxException {
-    URI uri = new URI(fileLocation);
-    String path = uri.normalize().getPath();
-    int idx = path.lastIndexOf("/");
-    String filename = path;
-    if (idx >= 0) {
-      filename = path.substring(idx + 1, path.length());
-    }
-    LOG.info("filename: {} for file location: {}", filename, fileLocation);
-    return filename;
   }
 
   protected InputFile getInputFile(String location) {
@@ -427,6 +433,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
 
   protected InputFile getCachedInputFile(FileScanTask task, String location) {
     if (count == 0) {
+      // for first task, we don't want to prefetch, so return the original input file
       return inputFiles().get(location);
     }
     if (!this.s3ToLocal.containsKey(location)) {

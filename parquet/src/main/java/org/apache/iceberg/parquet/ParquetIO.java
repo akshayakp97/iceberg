@@ -118,6 +118,16 @@ class ParquetIO {
     public void seek(long newPos) throws IOException {
       delegate.seek(newPos);
     }
+
+    @Override
+    public int read(byte b[], int off, int len) throws IOException {
+      return delegate.read(b, off, len);
+    }
+
+    @Override
+    public int read() throws IOException {
+      return delegate.read();
+    }
   }
 
   private static class ParquetOutputStreamAdapter extends DelegatingPositionOutputStream {
