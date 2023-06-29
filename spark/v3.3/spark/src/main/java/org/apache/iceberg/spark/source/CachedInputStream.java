@@ -73,6 +73,7 @@ public class CachedInputStream extends SeekableInputStream implements RangeReada
 
   @Override
   public int read() throws IOException {
+    currentPos += 1;
     return delegate.read();
   }
 
@@ -83,8 +84,8 @@ public class CachedInputStream extends SeekableInputStream implements RangeReada
       byte[] cachedData = fileRangeCache.getCachedFooter(inputFile.location());
       int sourcePosition = 0;
       if (currentPos > fileRangeCache.getCacheStartPositionForFile(inputFile.location())) {
-        sourcePosition = (int) (currentPos - fileRangeCache.getCacheStartPositionForFile(inputFile.location()));
-        sourcePosition = sourcePosition + 4;
+        sourcePosition =
+            (int) (currentPos - fileRangeCache.getCacheStartPositionForFile(inputFile.location()));
       }
       System.arraycopy(cachedData, sourcePosition, b, 0, b.length);
       return b.length;
