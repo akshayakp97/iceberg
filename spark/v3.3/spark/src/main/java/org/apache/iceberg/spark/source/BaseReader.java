@@ -19,6 +19,7 @@
 package org.apache.iceberg.spark.source;
 
 import java.io.Closeable;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
@@ -60,8 +61,6 @@ import org.apache.iceberg.encryption.EncryptedInputFile;
 import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.io.IOUtil;
 import org.apache.iceberg.io.InputFile;
-import org.apache.iceberg.io.OutputFile;
-import org.apache.iceberg.io.PositionOutputStream;
 import org.apache.iceberg.io.ResolvingFileIO;
 import org.apache.iceberg.io.SeekableInputStream;
 import org.apache.iceberg.mapping.NameMapping;
@@ -381,17 +380,18 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
               localFilelength,
               dataToBeRead);
         } else {
+          long startOfData = start / (1024 * 1024);
           LOG.info(
-              "file: {} was created, blocking till all of the data is written.. local file length: {}mb, data to be read: {}mb",
+              "file: {} was created, blocking till start of the data is written.. local file length: {}mb, start of data to be read: {}mb",
               path,
               localFilelength,
-              dataToBeRead);
+              startOfData);
           while (true) {
             localFilelength = fileIO.newInputFile(path.toString()).getLength() / (1024 * 1024);
-            if (localFilelength < dataToBeRead) {
+            if (localFilelength < startOfData) {
               Thread.sleep(500);
             } else {
-              LOG.info("all data write complete");
+              LOG.info("start of data write complete");
               break;
             }
           }
@@ -401,15 +401,14 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
         return;
       } else {
         LOG.info("file does not exist, creating new one at: {}", path);
-        OutputFile outputFile = fileIO.newOutputFile(path.toString());
-        PositionOutputStream os = outputFile.createOrOverwrite();
+        FileOutputStream os = new FileOutputStream(path.toString());
         long s3WriteToDiskStartTime = System.currentTimeMillis();
         LOG.info("copying all of input stream to the locally created file at: {}", path);
         ByteStreams.copy(inputStream, os);
         LOG.info(
             "total time to write s3 file to local disk: {}",
             System.currentTimeMillis() - s3WriteToDiskStartTime);
-        this.s3ToLocal.put(inputFile.location(), outputFile.location());
+        this.s3ToLocal.put(inputFile.location(), path.toString());
         inputStream.close();
         os.close();
       }
