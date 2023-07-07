@@ -46,7 +46,7 @@ public class CachedInputStream extends SeekableInputStream implements RangeReada
   boolean isReadFromDisk = false;
   ResolvingFileIO fileIO = new ResolvingFileIO();
 
-  private static final long SLEEP_TIME = 5000;
+  private static final long SLEEP_TIME = 1000;
 
   public CachedInputStream(FileRangeCache fileRangeCache, InputFile inputFile) {
     this.fileRangeCache = fileRangeCache;
