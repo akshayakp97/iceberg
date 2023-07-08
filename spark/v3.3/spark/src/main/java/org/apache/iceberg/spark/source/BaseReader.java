@@ -110,6 +110,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private TaskT currentTask = null;
   private int count = 0;
   private final Collection<TaskT> tasksCache = Lists.newArrayList();
+  private List<CompletableFuture<Object>> completableFutureList;
 
   BaseReader(
       Table table,
@@ -171,7 +172,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
 
     try {
       LOG.info("attempting to download all files for the task group at: {}", new Date());
-      prefetchS3Files();
+      completableFutureList = prefetchS3Files();
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
@@ -268,6 +269,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     while (tasks.hasNext()) {
       tasks.next();
     }
+    completableFutureList.stream().map(CompletableFuture::join).collect(Collectors.toList());
   }
 
   private List<CompletableFuture<Object>> prefetchS3FileForTask(TaskT task) throws IOException {
