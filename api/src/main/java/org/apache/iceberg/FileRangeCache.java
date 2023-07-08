@@ -22,11 +22,8 @@ import java.nio.file.Path;
 import java.util.Map;
 import org.apache.iceberg.io.InputFile;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class FileRangeCache {
-  private static final Logger LOG = LoggerFactory.getLogger(FileRangeCache.class);
   Table table;
   Map<String, CacheType> byteRangeToCacheType = Maps.newHashMap();
 

@@ -19,6 +19,7 @@
 package org.apache.iceberg.spark.source;
 
 import java.io.Closeable;
+import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -38,7 +39,6 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.util.Utf8;
-import org.apache.hadoop.conf.Configuration;
 import org.apache.iceberg.CacheType;
 import org.apache.iceberg.CachedFileNameResolver;
 import org.apache.iceberg.ContentFile;
@@ -61,7 +61,6 @@ import org.apache.iceberg.encryption.EncryptedInputFile;
 import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.io.IOUtil;
 import org.apache.iceberg.io.InputFile;
-import org.apache.iceberg.io.ResolvingFileIO;
 import org.apache.iceberg.io.SeekableInputStream;
 import org.apache.iceberg.mapping.NameMapping;
 import org.apache.iceberg.mapping.NameMappingParser;
@@ -110,7 +109,6 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private T current = null;
   private TaskT currentTask = null;
   private int count = 0;
-  private ResolvingFileIO fileIO;
   private final Collection<TaskT> tasksCache = Lists.newArrayList();
 
   BaseReader(
@@ -170,10 +168,6 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     this.counter = new DeleteCounter();
     this.s3ToLocal = Maps.newConcurrentMap();
     constructorInitiationTime = System.currentTimeMillis();
-    fileIO = new ResolvingFileIO();
-    Map<String, String> properties = Maps.newHashMap();
-    fileIO.initialize(properties);
-    fileIO.setConf(new Configuration());
 
     try {
       LOG.info("attempting to download all files for the task group at: {}", new Date());
@@ -363,16 +357,15 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
       }
       Path path = CachedFileNameResolver.getCacheFileURI(table, inputFile.location());
       LOG.info("checking if file already exists at path: {}", path);
-      if (fileIO.newInputFile(path.toString()).exists()
-          && fileIO.newInputFile(path.toString()).getLength() == inputFile.getLength()) {
+      File localFile = new File(path.toString());
+      if (localFile.exists() && localFile.length() == inputFile.getLength()) {
         LOG.info("file: {} was already created, and full length has been written, returning", path);
         this.s3ToLocal.put(inputFile.location(), path.toString());
         inputStream.close();
         return;
-      } else if (fileIO.newInputFile(path.toString()).exists()
-          && fileIO.newInputFile(path.toString()).getLength() < inputFile.getLength()) {
+      } else if (localFile.exists() && localFile.length() < inputFile.getLength()) {
         // TODO: this might block forever if the other thread died, setup timeout
-        long localFilelength = fileIO.newInputFile(path.toString()).getLength() / (1024 * 1024);
+        long localFilelength = localFile.length() / (1024 * 1024);
         if (localFilelength >= dataToBeRead) {
           LOG.info(
               "file: {} was created and has data of size: {}mb written.. data needed for this task: {}mb is ready to be read, returning",
@@ -387,11 +380,11 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
               localFilelength,
               startOfData);
           while (true) {
-            localFilelength = fileIO.newInputFile(path.toString()).getLength() / (1024 * 1024);
+            localFilelength = localFile.length() / (1024 * 1024);
             if (localFilelength < startOfData) {
-              Thread.sleep(500);
+              Thread.sleep(50);
             } else {
-              LOG.info("start of data write complete");
+              LOG.info("start of data write complete at : {}", new Date());
               break;
             }
           }
@@ -419,6 +412,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     }
   }
 
+  // not sure where this method is used tbh..
   protected InputFile getInputFile(String location) {
     if (count == 0) {
       return inputFiles().get(location);
@@ -427,7 +421,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
       LOG.info("printing hashmap keys:{}", this.s3ToLocal.keySet());
       throw new RuntimeException(String.format("s3 file doesnt exist :%s", location));
     }
-    return fileIO.newInputFile(this.s3ToLocal.get(location));
+    return table.io().newInputFile(this.s3ToLocal.get(location));
   }
 
   protected InputFile getCachedInputFile(FileScanTask task, String location) {

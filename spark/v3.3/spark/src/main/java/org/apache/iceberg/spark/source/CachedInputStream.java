@@ -23,14 +23,10 @@ import static java.lang.Thread.sleep;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.util.Map;
-import org.apache.hadoop.conf.Configuration;
 import org.apache.iceberg.FileRangeCache;
 import org.apache.iceberg.io.InputFile;
 import org.apache.iceberg.io.RangeReadable;
-import org.apache.iceberg.io.ResolvingFileIO;
 import org.apache.iceberg.io.SeekableInputStream;
-import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,16 +40,12 @@ public class CachedInputStream extends SeekableInputStream implements RangeReada
 
   // yikes, this is needed because s3inputstream always returns 0 for available
   boolean isReadFromDisk = false;
-  ResolvingFileIO fileIO = new ResolvingFileIO();
 
   private static final long SLEEP_TIME = 500;
 
   public CachedInputStream(FileRangeCache fileRangeCache, InputFile inputFile) {
     this.fileRangeCache = fileRangeCache;
     this.inputFile = inputFile;
-    Map<String, String> properties = Maps.newHashMap();
-    fileIO.initialize(properties);
-    fileIO.setConf(new Configuration());
   }
 
   @Override
