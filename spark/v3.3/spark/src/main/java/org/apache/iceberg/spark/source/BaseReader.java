@@ -35,6 +35,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.avro.generic.GenericData;
@@ -69,6 +72,8 @@ import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.relocated.com.google.common.io.ByteStreams;
+import org.apache.iceberg.relocated.com.google.common.util.concurrent.MoreExecutors;
+import org.apache.iceberg.relocated.com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.iceberg.spark.SparkSchemaUtil;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types.NestedField;
@@ -111,6 +116,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
   private int count = 0;
   private final Collection<TaskT> tasksCache = Lists.newArrayList();
   private List<CompletableFuture<Object>> completableFutureList;
+  private ExecutorService executorService;
 
   BaseReader(
       Table table,
@@ -124,6 +130,15 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     this.tasksCache.addAll(taskGroup.tasks());
     LOG.info("tasks list size : {}", tasksCache.size());
     this.tasks = tasksCache.iterator();
+    this.executorService =
+        MoreExecutors.getExitingExecutorService(
+            (ThreadPoolExecutor)
+                Executors.newFixedThreadPool(
+                    Runtime.getRuntime().availableProcessors(),
+                    new ThreadFactoryBuilder()
+                        .setDaemon(true)
+                        .setNameFormat("iceberg-reader-threads-%d")
+                        .build()));
 
     FileRangeCache cache = new FileRangeCache(table);
     for (TaskT task : tasksCache) {
@@ -131,31 +146,29 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
       InputFile inputFile = inputFiles().get(path);
       cache.putIfAbsent(
           path, task.asFileScanTask().start(), task.asFileScanTask().length(), CacheType.DISK);
-      // footer bytes to be read from memory
-      cache.putIfAbsent(path, inputFile.getLength() - 8, inputFile.getLength(), CacheType.MEMORY);
       // meta data index to be read from memory
-      SeekableInputStream is = inputFile.newStream();
       int fileMetadataLength;
+      int footerBytesLength = 8;
+      long fileMetadataLengthIndex = inputFile.getLength() - footerBytesLength;
       try {
-        is.seek(inputFile.getLength() - 8);
+        SeekableInputStream is = inputFile.newStream();
+        is.seek(fileMetadataLengthIndex);
         fileMetadataLength = BytesUtils.readIntLittleEndian(is);
-        if (!cache.doesFileExistInCache(inputFile.location())) {
-          long fileMetadataIdx = inputFile.getLength() - 8 - fileMetadataLength;
-          is.seek(fileMetadataIdx);
-          byte[] cacheArr = new byte[fileMetadataLength + 8];
-          IOUtil.readFully(is, cacheArr, 0, fileMetadataLength + 8);
-          cache.setupCache(inputFile, cacheArr);
-        }
         is.close();
+        if (!cache.doesFileExistInCache(inputFile.location())) {
+          is = inputFile.newStream();
+          long fileMetadataIndex = fileMetadataLengthIndex - fileMetadataLength;
+          is.seek(fileMetadataIndex);
+          byte[] cacheArr = new byte[fileMetadataLength + footerBytesLength];
+          IOUtil.readFully(is, cacheArr, 0, fileMetadataLength + footerBytesLength);
+          is.close();
+          cache.setupCache(inputFile, cacheArr);
+          // meta data start index should be read from memory
+          cache.putIfAbsent(path, fileMetadataIndex, inputFile.getLength(), CacheType.MEMORY);
+        }
       } catch (IOException e) {
         throw new RuntimeException("could not open input file to get metadata length");
       }
-      // meta data start index should be read from memory
-      cache.putIfAbsent(
-          path,
-          inputFile.getLength() - fileMetadataLength - 8,
-          inputFile.getLength(),
-          CacheType.MEMORY);
       task.asFileScanTask().setCache(cache);
     }
 
@@ -213,7 +226,7 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
           return true;
         } else if (tasks.hasNext()) {
           this.currentTask = tasks.next();
-          LOG.info("reading data for the task...: {} at {}", this.currentTask, new Date());
+          LOG.info("reading data for task-#{}... at {}", count + 1, new Date());
           if (count >= 1) {
             // we skip prefetch for first task
             LOG.info(
@@ -269,6 +282,9 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
     while (tasks.hasNext()) {
       tasks.next();
     }
+
+    LOG.info("shutting down all writers");
+    this.executorService.shutdown();
     completableFutureList.stream().map(CompletableFuture::join).collect(Collectors.toList());
   }
 
@@ -339,7 +355,8 @@ abstract class BaseReader<T, TaskT extends ScanTask> implements Closeable {
                         throw new RuntimeException(e);
                       }
                       return null;
-                    }))
+                    },
+                    executorService))
         .collect(Collectors.toList());
   }
 

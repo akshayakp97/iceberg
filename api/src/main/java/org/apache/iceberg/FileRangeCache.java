@@ -28,7 +28,7 @@ public class FileRangeCache {
   Map<String, CacheType> byteRangeToCacheType = Maps.newHashMap();
 
   Map<String, Long> fileToCacheStartPosition = Maps.newHashMap();
-  Map<String, Integer> fileToCacheSize = Maps.newHashMap();
+  Map<String, Long> fileToCacheSize = Maps.newHashMap();
 
   Map<String, byte[]> fileToCache = Maps.newHashMap();
 
@@ -41,18 +41,17 @@ public class FileRangeCache {
     byteRangeToCacheType.putIfAbsent(key, cacheType);
     if (cacheType.equals(CacheType.MEMORY)) {
       fileToCacheStartPosition.put(path, start);
-      // read metadata without footer
-      fileToCacheSize.put(path, (int) (length - start - 8));
+      fileToCacheSize.put(path, length - start);
     }
   }
 
-  public CacheType getCacheType(String path, long start, long length) {
-    String key = getKey(path, start, length);
-    if (!byteRangeToCacheType.containsKey(key)) {
-      // return disk by default;
-      return CacheType.DISK;
+  public CacheType getCacheType(String path, long start) {
+    if (fileToCacheStartPosition.containsKey(path)) {
+      if (fileToCacheStartPosition.get(path) <= start) {
+        return CacheType.MEMORY;
+      }
     }
-    return byteRangeToCacheType.get(key);
+    return CacheType.DISK;
   }
 
   public void setupCache(InputFile inputFile, byte[] cache) {

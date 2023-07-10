@@ -23,6 +23,7 @@ import static java.lang.Thread.sleep;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import org.apache.iceberg.CacheType;
 import org.apache.iceberg.FileRangeCache;
 import org.apache.iceberg.io.InputFile;
 import org.apache.iceberg.io.RangeReadable;
@@ -37,10 +38,7 @@ public class CachedInputStream extends SeekableInputStream implements RangeReada
   SeekableInputStream delegate;
   RandomAccessFile randomAccessFile;
   long currentPos;
-
-  // yikes, this is needed because s3inputstream always returns 0 for available
   boolean isReadFromDisk = false;
-
   private static final long SLEEP_TIME = 500;
 
   public CachedInputStream(FileRangeCache fileRangeCache, InputFile inputFile) {
@@ -50,10 +48,7 @@ public class CachedInputStream extends SeekableInputStream implements RangeReada
 
   @Override
   public long getPos() throws IOException {
-    if (delegate == null) {
-      throw new RuntimeException("currentInputStream wasn't set?");
-    }
-    return delegate.getPos();
+    return randomAccessFile.getFilePointer();
   }
 
   @Override
@@ -62,25 +57,16 @@ public class CachedInputStream extends SeekableInputStream implements RangeReada
     boolean flag = true;
     while (flag) {
       try {
-        switch (fileRangeCache.getCacheType(inputFile.location(), newPos, inputFile.getLength())) {
-          case MEMORY:
-            delegate = inputFile.newStream();
-            delegate.seek(newPos);
-            isReadFromDisk = false;
-            break;
-          default:
-            randomAccessFile =
-                new RandomAccessFile(
-                    String.valueOf(fileRangeCache.getCachedFilePath(inputFile.location())), "r");
-            randomAccessFile.seek(newPos);
-            isReadFromDisk = true;
+        if (fileRangeCache.getCacheType(inputFile.location(), newPos).equals(CacheType.DISK)) {
+          randomAccessFile =
+              new RandomAccessFile(
+                  String.valueOf(fileRangeCache.getCachedFilePath(inputFile.location())), "r");
+          randomAccessFile.seek(newPos);
+          isReadFromDisk = true;
         }
         flag = false;
       } catch (EOFException ignored) {
-        delegate.close();
-        if (randomAccessFile != null) {
-          randomAccessFile.close();
-        }
+        randomAccessFile.close();
         try {
           sleep(SLEEP_TIME);
         } catch (InterruptedException e) {
@@ -95,8 +81,17 @@ public class CachedInputStream extends SeekableInputStream implements RangeReada
   @Override
   public int read() throws IOException {
     LOG.info("at cachedinput stream read without params");
+    if (isReadFromDisk) {
+      currentPos += 1;
+      return randomAccessFile.read();
+    }
+    // return one byte from cache
+    byte[] cachedData = fileRangeCache.getCachedFooter(inputFile.location());
+    long cacheStartPos = fileRangeCache.getCacheStartPositionForFile(inputFile.location());
+    int bytePos = (int) (currentPos - cacheStartPos);
     currentPos += 1;
-    return delegate.read();
+    // read() method of an InputStream returns converts the byte to an int in range (-1, 255)
+    return Byte.toUnsignedInt(cachedData[bytePos]);
   }
 
   // We need to somehow detect that this file has not been fully written and block here
@@ -122,6 +117,17 @@ public class CachedInputStream extends SeekableInputStream implements RangeReada
     }
 
     // return cached data here
+    if (!isReadFromDisk) {
+      return readFromCache(b);
+    }
+
+    LOG.info("returning after reading: {} bytes", len);
+    int bytesRead = randomAccessFile.read(b, off, len);
+    currentPos += bytesRead;
+    return bytesRead;
+  }
+
+  private int readFromCache(byte b[]) {
     if (!isReadFromDisk
         && currentPos >= fileRangeCache.getCacheStartPositionForFile(inputFile.location())) {
       byte[] cachedData = fileRangeCache.getCachedFooter(inputFile.location());
@@ -131,11 +137,8 @@ public class CachedInputStream extends SeekableInputStream implements RangeReada
             (int) (currentPos - fileRangeCache.getCacheStartPositionForFile(inputFile.location()));
       }
       System.arraycopy(cachedData, sourcePosition, b, 0, b.length);
-      return b.length;
     }
-
-    LOG.info("returning after reading: {} bytes", len);
-    return randomAccessFile.read(b, off, len);
+    return b.length;
   }
 
   @Override
