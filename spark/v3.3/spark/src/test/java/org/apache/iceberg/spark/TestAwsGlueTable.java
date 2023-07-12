@@ -39,8 +39,7 @@ public class TestAwsGlueTable {
             .config("spark.driver.bindAddress", "127.0.0.1")
             .config("spark.sql.defaultUrlStreamHandlerFactory.enabled", "false")
             .getOrCreate();
-    // spark.sql("select * from tpcds_3000_iceberg_parq.2gigs_tbl_multiple_files").show(4709181);
-    spark.sql("select * from tpcds_3000_iceberg_parq.iceberg_parquet_large_file_size_small_row_group").show(2412100);
+     spark.sql("select * from tpcds_3000_iceberg_parq.iceberg_data_prefetch_test_dataset").show(4709181);
     //    Dataset<Row> df = spark.sql("select * from
     // tpcds_3000_iceberg_parq.2gigs_tbl_multiple_files");
     //    DataFrameWriter<Row> dataFrameWriter = df.write();

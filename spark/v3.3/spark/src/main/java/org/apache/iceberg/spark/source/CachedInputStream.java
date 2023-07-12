@@ -39,7 +39,7 @@ public class CachedInputStream extends SeekableInputStream implements RangeReada
   RandomAccessFile randomAccessFile;
   long currentPos;
   boolean isReadFromDisk = false;
-  private static final long SLEEP_TIME = 500;
+  private static final long SLEEP_TIME = 10;
 
   public CachedInputStream(FileRangeCache fileRangeCache, InputFile inputFile) {
     this.fileRangeCache = fileRangeCache;
